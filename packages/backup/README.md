@@ -42,6 +42,7 @@ if (isBackupDue(settings, Date.now())) {
 | `runBackup`, `runRestore` | Collect → encrypt → upload, and its inverse |
 | `isBackupDue`, `nextBackupAt`, `describeStaleness` | Automatic backup scheduling |
 | `BackupSettings`, `BackupProgress`, `DEFAULT_BACKUP_SETTINGS` | Settings and progress model |
+| `InMemoryBackupService` | A working BackupService with no backend, for previews and tests |
 | `BackupStatus`, `BackupScreen` | Screens |
 | `BackupError`, `BackupErrorCode` | Typed failures |
 

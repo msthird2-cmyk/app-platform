@@ -7,6 +7,7 @@ import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { messageForCode } from './src/messages';
+import { DEMO_ASSETS, DEMO_LIABILITIES, DEMO_PREVIOUS_NET_WORTH } from './src/demo';
 
 export const COLLECTIONS = ['assets', 'liabilities', 'snapshots'] as const;
 
@@ -39,7 +40,12 @@ export default function App({ authService, accountService, backupService }: NetW
         />
       }
     >
-      <DashboardScreen assets={[]} liabilities={[]} previousNetWorth={null} onAddAsset={() => undefined} />
+      <DashboardScreen
+        assets={DEMO_ASSETS}
+        liabilities={DEMO_LIABILITIES}
+        previousNetWorth={DEMO_PREVIOUS_NET_WORTH}
+        onAddAsset={() => undefined}
+      />
     </AppCore>
   );
 }

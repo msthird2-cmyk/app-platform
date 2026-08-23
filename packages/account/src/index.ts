@@ -12,6 +12,10 @@ export {
   isDeletionOrderValid,
   type DeleteAccountOptions,
 } from './services/deleteAccountFlow';
+export {
+  InMemoryAccountService,
+  type InMemoryAccountOptions,
+} from './services/InMemoryAccountService';
 export { DeleteAccount, type DeleteAccountProps } from './components/DeleteAccount';
 export { ProfileScreen, type ProfileScreenProps } from './components/ProfileScreen';
 export { SettingsScreen, type SettingsScreenProps, type SettingsSection } from './components/SettingsScreen';

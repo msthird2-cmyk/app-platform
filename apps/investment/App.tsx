@@ -7,6 +7,7 @@ import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
 import { PortfolioScreen } from './src/screens/PortfolioScreen';
 import { messageForCode } from './src/messages';
+import { DEMO_HOLDINGS } from './src/demo';
 
 export const COLLECTIONS = ['holdings', 'transactions', 'prices'] as const;
 
@@ -35,7 +36,11 @@ export default function App({ authService, accountService, backupService }: Inve
         />
       }
     >
-      <PortfolioScreen holdings={[]} onAddHolding={() => undefined} onSelectHolding={() => undefined} />
+      <PortfolioScreen
+        holdings={DEMO_HOLDINGS}
+        onAddHolding={() => undefined}
+        onSelectHolding={() => undefined}
+      />
     </AppCore>
   );
 }

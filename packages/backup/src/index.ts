@@ -14,5 +14,6 @@ export {
   type RunBackupOptions,
   type RunRestoreOptions,
 } from './services/backupFlow';
+export { InMemoryBackupService } from './services/InMemoryBackupService';
 export { BackupStatus, type BackupStatusProps } from './components/BackupStatus';
 export { BackupScreen, type BackupScreenProps } from './components/BackupScreen';

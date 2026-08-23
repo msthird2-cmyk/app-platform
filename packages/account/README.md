@@ -40,6 +40,7 @@ import { DeleteAccount, deleteAccountFlow } from '@platform/account';
 | `deleteAccountFlow` | Ordered deletion that never orphans encrypted data |
 | `deleteUserDataFlow` | Deletes data and backups, keeps the account |
 | `isDeletionOrderValid`, `DELETION_STEPS`, `DeletionStep` | The canonical order |
+| `InMemoryAccountService` | A working AccountService with no backend; records which deletion steps ran |
 | `DeleteAccount`, `ProfileScreen`, `SettingsScreen` | Screens and the danger zone |
 | `AccountError`, `AccountErrorCode` | Typed failures |
 

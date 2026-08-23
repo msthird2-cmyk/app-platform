@@ -147,4 +147,10 @@ export default tseslint.config(
     files: ['scripts/**/*.mjs', '*.mjs', '**/*.config.*'],
     rules: { 'no-restricted-imports': 'off' },
   },
+  {
+    // Metro and Babel load their config through CommonJS; they cannot be ESM.
+    files: ['**/*.cjs'],
+    languageOptions: { sourceType: 'commonjs', globals: globals.node },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
 );

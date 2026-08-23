@@ -7,6 +7,7 @@ import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
 import { ExpensesScreen } from './src/screens/ExpensesScreen';
 import { messageForCode } from './src/messages';
+import { DEMO_BUDGETS, DEMO_EXPENSES, DEMO_MONTH } from './src/demo';
 
 export const COLLECTIONS = ['expenses', 'budgets', 'rules'] as const;
 
@@ -36,7 +37,12 @@ export default function App({ authService, accountService, backupService, now }:
         />
       }
     >
-      <ExpensesScreen expenses={[]} budgets={[]} month={now ?? new Date()} onAddSpend={() => undefined} />
+      <ExpensesScreen
+        expenses={DEMO_EXPENSES}
+        budgets={DEMO_BUDGETS}
+        month={now ?? DEMO_MONTH}
+        onAddSpend={() => undefined}
+      />
     </AppCore>
   );
 }

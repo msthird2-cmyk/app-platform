@@ -35,6 +35,7 @@ import { AuthProvider, LoginScreen } from '@platform/auth';
 | `AuthService`, `AuthUser`, `Credentials` | The authentication contract |
 | `AuthProvider`, `useAuth` | Auth state and actions |
 | `validateEmail`, `validatePassword`, `validateCredentials`, `PasswordPolicy` | Pure credential checks returning codes |
+| `InMemoryAuthService` | A working AuthService with no backend, for previews and tests |
 | `LoginScreen`, `SignupScreen`, `PasswordResetScreen`, `DeviceVerification` | Screens |
 | `AuthError`, `AuthErrorCode` | Typed failures |
 

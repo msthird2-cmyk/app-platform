@@ -37,11 +37,19 @@ pnpm install
 pnpm turbo build test lint
 ```
 
-Run one application:
+Run one application. Each app's entry point injects the in-memory services, so
+it runs with no backend and no credentials:
 
 ```bash
-pnpm --filter @app/networth start     # Expo
-pnpm --filter @app/networth web       # react-native-web
+pnpm --filter @app/networth web       # react-native-web, http://localhost:8081
+pnpm --filter @app/networth start     # Expo, for a device or emulator
+```
+
+`expo start` reaches api.expo.dev to validate dependency versions. Behind a
+proxy that blocks it, add `--offline`:
+
+```bash
+pnpm --filter @app/networth exec expo start --web --offline
 ```
 
 Work on one package:
@@ -117,3 +125,21 @@ Tests cover pure logic. Importing `react-native` pulls in Flow-typed source that
 a plain test runner cannot parse, so logic that needs testing is kept in modules
 free of it (`packages/theme/src/scheme.ts` is the pattern). Component tests need
 a `react-native` → `react-native-web` alias.
+
+Every service interface has a working in-memory implementation —
+`InMemoryAuthService`, `InMemoryAccountService`, `InMemoryBackupService`,
+`InMemoryRepository`, `InMemorySecureStorage` — so a flow can be exercised end
+to end without a backend. `packages/account/tests` uses them to assert that a
+deletion leaves nothing behind, and that a failure part-way through leaves the
+account recoverable rather than orphaned.
+
+## Metro and pnpm
+
+pnpm keeps each package's real directory in a store at the workspace root and
+symlinks it into consumers. Metro needs to be told about that, so every app has
+a `metro.config.cjs` that watches the workspace root and lists both
+`node_modules` directories. Hierarchical lookup stays **on**: a dependency of a
+dependency (`expo` → `expo-modules-core`) lives beside it in the store, and only
+walking up from the importing file finds it. Anything Metro resolves from the
+app directory — `@babel/runtime`, `@expo/metro-runtime` — has to be declared in
+that app's `package.json` rather than relied on being hoisted.

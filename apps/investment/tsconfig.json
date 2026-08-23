@@ -6,6 +6,6 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["src", "App.tsx", "index.ts"],
+  "include": ["src", "App.tsx", "index.tsx"],
   "exclude": ["**/*.test.ts", "**/*.test.tsx", "tests"]
 }
