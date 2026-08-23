@@ -1,0 +1,37 @@
+{
+  "name": "@app/networth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Net worth calculation, asset categories, liabilities, dashboard.",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "web": "expo start --web",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@platform/account": "workspace:*",
+    "@platform/auth": "workspace:*",
+    "@platform/backup": "workspace:*",
+    "@platform/core": "workspace:*",
+    "@platform/data": "workspace:*",
+    "@platform/firebase": "workspace:*",
+    "@platform/security": "workspace:*",
+    "@platform/theme": "workspace:*",
+    "@platform/ui": "workspace:*",
+    "@platform/utils": "workspace:*",
+    "expo": "~52.0.20",
+    "expo-status-bar": "~2.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-native": "^0.76.5",
+    "react-native-web": "^0.19.13"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Expense",
+    "slug": "expense",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.appplatform.expense"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

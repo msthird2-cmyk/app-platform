@@ -1,0 +1,19 @@
+import { CodedError } from '@platform/utils';
+
+export class SecurityError extends CodedError {
+  readonly domain = 'security';
+}
+
+export const SecurityErrorCode = {
+  ENCRYPTION_FAILED: 'ENCRYPTION_FAILED',
+  DECRYPTION_FAILED: 'DECRYPTION_FAILED',
+  KEY_DERIVATION_FAILED: 'KEY_DERIVATION_FAILED',
+  SECURE_STORAGE_UNAVAILABLE: 'SECURE_STORAGE_UNAVAILABLE',
+  BIOMETRICS_UNAVAILABLE: 'BIOMETRICS_UNAVAILABLE',
+  RECOVERY_CODE_INVALID: 'RECOVERY_CODE_INVALID',
+  APP_LOCKED_OUT: 'APP_LOCKED_OUT',
+  SESSION_EXPIRED: 'SESSION_EXPIRED',
+  DEVICE_NOT_REGISTERED: 'DEVICE_NOT_REGISTERED',
+} as const;
+
+export type SecurityErrorCode = (typeof SecurityErrorCode)[keyof typeof SecurityErrorCode];

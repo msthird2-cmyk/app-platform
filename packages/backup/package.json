@@ -1,0 +1,39 @@
+{
+  "name": "@platform/backup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Manual and automatic backup, restore, status and progress.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-native": "^0.76.5"
+  },
+  "dependencies": {
+    "@platform/ui": "workspace:*",
+    "@platform/theme": "workspace:*",
+    "@platform/utils": "workspace:*",
+    "@platform/data": "workspace:*",
+    "@platform/security": "workspace:*",
+    "react": "^18.3.1",
+    "react-native": "^0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12"
+  }
+}

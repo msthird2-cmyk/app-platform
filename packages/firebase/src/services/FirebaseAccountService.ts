@@ -1,0 +1,129 @@
+import { deleteUser, getAuth, type Auth } from 'firebase/auth';
+import {
+  collection as firestoreCollection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  getFirestore,
+  setDoc,
+  writeBatch,
+  type Firestore,
+} from 'firebase/firestore';
+import { deleteObject, listAll, ref, getStorage, type FirebaseStorage } from 'firebase/storage';
+import type { FirebaseApp } from 'firebase/app';
+import type { AccountService, UserProfile, AccountErrorCode } from '@platform/account';
+import { accountError } from '../errors';
+
+export class FirebaseAccountService implements AccountService {
+  private readonly auth: Auth;
+  private readonly db: Firestore;
+  private readonly storage: FirebaseStorage;
+
+  constructor(
+    app: FirebaseApp,
+    private readonly collections: readonly string[],
+  ) {
+    this.auth = getAuth(app);
+    this.db = getFirestore(app);
+    this.storage = getStorage(app);
+  }
+
+  private requireUserId(): string {
+    const userId = this.auth.currentUser?.uid;
+    if (!userId) throw accountError('REAUTHENTICATION_REQUIRED' satisfies AccountErrorCode);
+    return userId;
+  }
+
+  async getProfile(): Promise<UserProfile> {
+    const user = this.auth.currentUser;
+    if (!user) throw accountError('REAUTHENTICATION_REQUIRED' satisfies AccountErrorCode);
+    const snapshot = await getDoc(doc(this.db, 'users', user.uid));
+    const stored = snapshot.data();
+    return {
+      id: user.uid,
+      email: user.email ?? '',
+      displayName: (stored?.displayName as string | undefined) ?? user.displayName,
+      createdAt: user.metadata.creationTime ? Date.parse(user.metadata.creationTime) : Date.now(),
+    };
+  }
+
+  async updateProfile(changes: { displayName?: string }): Promise<UserProfile> {
+    const userId = this.requireUserId();
+    try {
+      await setDoc(doc(this.db, 'users', userId), changes, { merge: true });
+      return await this.getProfile();
+    } catch (cause) {
+      throw accountError('PROFILE_UPDATE_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  /** Step 3 — encrypted records first, while the account can still authenticate. */
+  async deleteUserData(): Promise<void> {
+    const userId = this.requireUserId();
+    try {
+      for (const collection of this.collections) {
+        const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/${collection}`));
+        for (let index = 0; index < snapshot.docs.length; index += 400) {
+          const batch = writeBatch(this.db);
+          for (const document of snapshot.docs.slice(index, index + 400)) batch.delete(document.ref);
+          await batch.commit();
+        }
+      }
+    } catch (cause) {
+      throw accountError('DATA_DELETION_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  /** Step 4 — backups and file storage. */
+  async deleteBackups(): Promise<void> {
+    const userId = this.requireUserId();
+    try {
+      const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/backups`));
+      for (const document of snapshot.docs) await deleteDoc(document.ref);
+      const stored = await listAll(ref(this.storage, `users/${userId}/backups`));
+      await Promise.all(stored.items.map((item) => deleteObject(item)));
+    } catch (cause) {
+      throw accountError('BACKUP_DELETION_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  /** Step 5 — devices, settings and any other secondary record. */
+  async deleteSecondaryRecords(): Promise<void> {
+    const userId = this.requireUserId();
+    try {
+      for (const collection of ['devices', 'deviceVerifications', 'settings']) {
+        const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/${collection}`));
+        for (const document of snapshot.docs) await deleteDoc(document.ref);
+      }
+      await deleteDoc(doc(this.db, 'users', userId));
+    } catch (cause) {
+      throw accountError('DATA_DELETION_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  /** Step 6 — the authentication account, only once its data is gone. */
+  async deleteAccount(): Promise<void> {
+    const user = this.auth.currentUser;
+    if (!user) throw accountError('REAUTHENTICATION_REQUIRED' satisfies AccountErrorCode);
+    try {
+      await deleteUser(user);
+    } catch (cause) {
+      throw accountError('ACCOUNT_DELETION_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  async exportUserData(): Promise<unknown> {
+    const userId = this.requireUserId();
+    try {
+      const collections: Record<string, unknown[]> = {};
+      for (const collection of this.collections) {
+        const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/${collection}`));
+        collections[collection] = snapshot.docs.map((document) => document.data());
+      }
+      return collections;
+    } catch (cause) {
+      throw accountError('EXPORT_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Net Worth",
+    "slug": "networth",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.appplatform.networth"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
