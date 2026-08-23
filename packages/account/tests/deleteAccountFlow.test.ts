@@ -13,6 +13,8 @@ function trackingService(overrides: Partial<AccountService> = {}) {
   const service: AccountService = {
     getProfile: async () => ({ id: 'u1', email: 'a@b.co', displayName: null, createdAt: 0 }),
     updateProfile: async () => ({ id: 'u1', email: 'a@b.co', displayName: null, createdAt: 0 }),
+    beginDeletion: async () => void calls.push('beginDeletion'),
+    hasPendingDeletion: async () => calls.includes('beginDeletion'),
     deleteUserData: async () => void calls.push('deleteUserData'),
     deleteBackups: async () => void calls.push('deleteBackups'),
     deleteSecondaryRecords: async () => void calls.push('deleteSecondaryRecords'),
@@ -28,11 +30,12 @@ describe('deleteAccountFlow', () => {
     const { service, calls } = trackingService();
     const steps = await deleteAccountFlow(
       service,
-      { clearLocalState: async () => undefined, onSignedOut: () => undefined },
+      { reauthenticate: async () => undefined, clearLocalState: async () => undefined, onSignedOut: () => undefined },
       { confirmed: true },
     );
 
     expect(calls).toEqual([
+      'beginDeletion',
       'deleteUserData',
       'deleteBackups',
       'deleteSecondaryRecords',
@@ -41,6 +44,8 @@ describe('deleteAccountFlow', () => {
     expect(calls.indexOf('deleteAccount')).toBe(calls.length - 1);
     expect(steps).toEqual([
       'confirm',
+      'reauthenticate',
+      'journal',
       'delete-user-data',
       'delete-backups',
       'delete-secondary-records',
@@ -56,34 +61,53 @@ describe('deleteAccountFlow', () => {
     await expect(
       deleteAccountFlow(
         service,
-        { clearLocalState: async () => undefined, onSignedOut: () => undefined },
+        { reauthenticate: async () => undefined, clearLocalState: async () => undefined, onSignedOut: () => undefined },
         { confirmed: false },
       ),
     ).rejects.toMatchObject({ code: AccountErrorCode.CONFIRMATION_REQUIRED });
     expect(calls).toEqual([]);
   });
 
-  it('re-authenticates before touching any data', async () => {
+  it('re-authenticates by default, before touching any data', async () => {
     const { service, calls } = trackingService();
     const reauthenticate = vi.fn(async () => void calls.push('reauthenticate'));
     await deleteAccountFlow(
       service,
       { reauthenticate, clearLocalState: async () => undefined, onSignedOut: () => undefined },
-      { confirmed: true, requiresReauthentication: true },
+      { confirmed: true },
     );
     expect(reauthenticate).toHaveBeenCalledOnce();
     expect(calls[0]).toBe('reauthenticate');
   });
 
-  it('demands a re-authentication callback when the backend requires one', async () => {
-    const { service } = trackingService();
+  // Firebase refuses deleteUser without a recent login. Discovering that at the
+  // final step would mean the data was already destroyed, so the flow refuses
+  // to start rather than failing at the end.
+  it('refuses to start when no re-authentication callback is supplied', async () => {
+    const { service, calls } = trackingService();
     await expect(
       deleteAccountFlow(
         service,
         { clearLocalState: async () => undefined, onSignedOut: () => undefined },
-        { confirmed: true, requiresReauthentication: true },
+        { confirmed: true },
       ),
     ).rejects.toMatchObject({ code: AccountErrorCode.REAUTHENTICATION_REQUIRED });
+    expect(calls).toEqual([]);
+  });
+
+  it('writes the deletion journal before the first destructive call', async () => {
+    const { service, calls } = trackingService();
+    await deleteAccountFlow(
+      service,
+      {
+        reauthenticate: async () => undefined,
+        clearLocalState: async () => undefined,
+        onSignedOut: () => undefined,
+      },
+      { confirmed: true },
+    );
+    expect(calls[0]).toBe('beginDeletion');
+    await expect(service.hasPendingDeletion()).resolves.toBe(true);
   });
 
   it('keeps the account when data deletion fails', async () => {
@@ -95,7 +119,7 @@ describe('deleteAccountFlow', () => {
     await expect(
       deleteAccountFlow(
         service,
-        { clearLocalState: async () => undefined, onSignedOut: () => undefined },
+        { reauthenticate: async () => undefined, clearLocalState: async () => undefined, onSignedOut: () => undefined },
         { confirmed: true },
       ),
     ).rejects.toMatchObject({ code: AccountErrorCode.DATA_DELETION_FAILED });
@@ -110,7 +134,7 @@ describe('deleteAccountFlow', () => {
       },
     });
     await expect(
-      deleteAccountFlow(service, { clearLocalState: async () => undefined, onSignedOut }, { confirmed: true }),
+      deleteAccountFlow(service, { reauthenticate: async () => undefined, clearLocalState: async () => undefined, onSignedOut }, { confirmed: true }),
     ).rejects.toMatchObject({ code: AccountErrorCode.ACCOUNT_DELETION_FAILED });
     expect(onSignedOut).not.toHaveBeenCalled();
   });
@@ -121,6 +145,7 @@ describe('deleteAccountFlow', () => {
     await deleteAccountFlow(
       service,
       {
+        reauthenticate: async () => undefined,
         clearLocalState: async () => undefined,
         onSignedOut: () => undefined,
         onProgress: (step) => seen.push(step),

@@ -23,6 +23,14 @@ export interface AuthService {
   sendPasswordReset(email: string): Promise<void>;
   /** Required before destructive operations such as account deletion. */
   reauthenticate(password: string): Promise<void>;
+  /** Re-sends the address verification message for the signed-in account. */
+  resendEmailVerification(): Promise<void>;
+  /**
+   * Device verification requires a server to issue the code and to decide the
+   * outcome; a client that can read the expected value, or write the verdict,
+   * is not performing a check. Implementations without a trusted server must
+   * fail closed with `DEVICE_VERIFICATION_UNAVAILABLE`.
+   */
   sendDeviceVerification(deviceId: string): Promise<void>;
   confirmDeviceVerification(deviceId: string, code: string): Promise<void>;
   onAuthStateChanged(listener: (user: AuthUser | null) => void): () => void;

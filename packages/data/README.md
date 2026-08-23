@@ -34,7 +34,7 @@ await runSync('assets', local, remoteRepository);
 | --- | --- |
 | `Repository`, `SyncableRecord`, `QueryOptions` | The persistence contract |
 | `InMemoryRepository` | Reference implementation for tests and previews |
-| `resolveConflict`, `touch` | Last-write-wins with revision tie-break; tombstones win |
+| `resolveConflict`, `touch` | Last-write-wins on the server timestamp, revision breaks ties, tombstones win |
 | `planSync`, `runSync` | Two-way sync between any two repositories |
 | `createRecord`, `isSyncableRecord`, `assertSyncableRecord` | Record validation |
 | `buildExportBundle`, `encryptExportBundle`, `decryptExportBundle`, `parseExportBundle` | Versioned, encrypted export format |
@@ -51,6 +51,10 @@ Applications supply the collection names and inject the concrete `Repository`.
 ## Limitations
 
 Deletes are soft: a tombstone must sync before it can be dropped. Export bundles are versioned — a bundle from a newer schema is rejected rather than partially read.
+
+Conflict resolution compares `updatedAt` **before** `revision`, deliberately: the remote adapter writes `updatedAt` with the server's clock and a client cannot forge it, whereas `revision` is authored on the device. Comparing the revision first would let one device claim an arbitrarily high number and win every subsequent conflict.
+
+`parseExportBundle` validates the envelope and each record's sync metadata, rejects the reserved keys `__proto__`, `constructor` and `prototype`, and builds its result on a null prototype. It does **not** validate application fields — a caller restoring a bundle must still constrain which collections may be written.
 
 ## Tests
 

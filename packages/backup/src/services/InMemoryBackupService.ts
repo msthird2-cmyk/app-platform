@@ -11,11 +11,12 @@ export class InMemoryBackupService implements BackupService {
     return [...this.summaries].sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  async upload(bundle: EncryptedExportBundle, summary: Omit<BackupSummary, 'id'>): Promise<BackupSummary> {
-    const stored: BackupSummary = { ...summary, id: `backup-${summary.createdAt}` };
-    this.bundles.set(stored.id, bundle);
-    this.summaries.push(stored);
-    return stored;
+  async upload(bundle: EncryptedExportBundle, summary: BackupSummary): Promise<BackupSummary> {
+    // Mirrors the storage rule: an existing backup is never overwritten.
+    if (this.bundles.has(summary.id)) throw new BackupError(BackupErrorCode.BACKUP_FAILED);
+    this.bundles.set(summary.id, bundle);
+    this.summaries.push(summary);
+    return summary;
   }
 
   async download(id: string): Promise<EncryptedExportBundle> {

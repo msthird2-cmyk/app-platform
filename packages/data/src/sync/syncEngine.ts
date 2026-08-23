@@ -57,7 +57,14 @@ export async function runSync<T extends object>(
   ]);
 
   const plan = planSync(local, remote);
-  await Promise.all(plan.push.map((record) => remoteRepo.put(collection, record)));
+
+  // The remote stamps its own `updatedAt`, so the local copy is replaced with
+  // whatever the remote actually stored. Without this the two sides differ by
+  // a timestamp forever and every sync re-pushes the same record.
+  const stored = await Promise.all(
+    plan.push.map((record) => remoteRepo.put(collection, record)),
+  );
+  await Promise.all(stored.map((record) => localRepo.put(collection, record)));
   await Promise.all(plan.pull.map((record) => localRepo.put(collection, record)));
 
   // Counts only — record contents never reach the log.

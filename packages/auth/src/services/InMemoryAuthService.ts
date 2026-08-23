@@ -25,6 +25,8 @@ export class InMemoryAuthService implements AuthService {
   private readonly verifications = new Map<string, string>();
   private current: AuthUser | null = null;
   private readonly code: string;
+  /** Counted so tests can assert a verification message was sent. */
+  verificationsSent = 0;
 
   constructor(options: InMemoryAuthOptions = {}) {
     this.code = options.deviceVerificationCode ?? '000000';
@@ -80,6 +82,7 @@ export class InMemoryAuthService implements AuthService {
       password,
     };
     this.users.set(key, stored);
+    this.verificationsSent += 1;
     const user = this.publicView(stored);
     this.emit(user);
     return user;
@@ -91,6 +94,11 @@ export class InMemoryAuthService implements AuthService {
 
   async sendPasswordReset(email: string): Promise<void> {
     if (!this.users.has(email.toLowerCase())) throw new AuthError(AuthErrorCode.USER_NOT_FOUND);
+  }
+
+  async resendEmailVerification(): Promise<void> {
+    if (!this.current) throw new AuthError(AuthErrorCode.USER_NOT_FOUND);
+    this.verificationsSent += 1;
   }
 
   async reauthenticate(password: string): Promise<void> {

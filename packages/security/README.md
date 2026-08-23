@@ -21,22 +21,34 @@ Deep paths such as `@platform/security/src/...` are rejected by ESLint, so inter
 ## Usage
 
 ```ts
-import { WebCryptoService, generateRecoveryCodes, hashRecoveryCodes } from '@platform/security';
+import {
+  WebCryptoService,
+  assertStrongPassphrase,
+  generateRecoveryCodes,
+  hashRecoveryCodes,
+} from '@platform/security';
 
 const crypto = new WebCryptoService();
-const payload = await crypto.encrypt(JSON.stringify(records), passphrase);
+
+assertStrongPassphrase(passphrase);              // throws before anything is read
+const payload = await crypto.encrypt(JSON.stringify(records), passphrase, {
+  userId,                                        // bound in as authenticated data,
+  appName,                                       // so the bundle cannot be replayed
+});
 
 const codes = generateRecoveryCodes(8);          // shown to the user once
-const hashes = await hashRecoveryCodes(codes, crypto); // only these are stored
+const records = await hashRecoveryCodes(codes, crypto, { now: Date.now() });
 ```
 
 ## Public API
 
 | Export | What it does |
 | --- | --- |
-| `CryptoService`, `EncryptedPayload`, `WebCryptoService` | AES-GCM with a PBKDF2-derived key |
-| `SecureStorage`, `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Storage and biometric interfaces plus fallbacks |
-| `generateRecoveryCodes`, `normalizeRecoveryCode`, `hashRecoveryCodes`, `verifyRecoveryCode` | Single-use recovery codes, stored hashed |
+| `CryptoService`, `EncryptedPayload`, `EncryptionContext`, `WebCryptoService` | AES-256-GCM with a PBKDF2-derived key, owner and application bound in as authenticated data |
+| `SecretHash`, `hashSecret`, `verifySecret` | Salted, iterated hashing for values that must resist offline attack |
+| `assessPassphrase`, `assertStrongPassphrase`, `PassphrasePolicy` | Passphrase strength, enforced before encryption |
+| `SecureStorage` (with `isHardwareBacked`), `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Storage and biometric interfaces plus fallbacks |
+| `generateRecoveryCodes`, `hashRecoveryCodes`, `verifyRecoveryCode`, `remainingRecoveryCodes` | Single-use, expiring recovery codes stored as salted hashes |
 | `AppLockState`, `registerFailedAttempt`, `isLockedOut`, `shouldAutoLock`, `assertUnlockable` | PIN lock with lockout and idle auto-lock |
 | `SessionTokens`, `needsRefresh`, `msUntilRefresh`, `assertActive`, `createSessionStore` | Session lifetime and persistence |
 | `getOrCreateDeviceId`, `assertRegistered`, `DeviceRegistry` | Per-install device identity |
@@ -52,7 +64,9 @@ Iteration count on `WebCryptoService` (defaults to 210,000). Applications inject
 
 ## Limitations
 
-`WebCryptoService` needs a WebCrypto implementation; native builds should inject a keystore-backed service behind the same interface. `InMemorySecureStorage` and `UnavailableBiometrics` are fallbacks for tests and the web, not production storage.
+`WebCryptoService` needs a WebCrypto implementation; native builds should inject a keystore-backed service behind the same interface. `InMemorySecureStorage` and `UnavailableBiometrics` are fallbacks for tests and the web, not production storage — `isHardwareBacked` is `false`, and `createSessionStore` refuses to persist tokens to any store that reports `false`. **No hardware-backed implementation ships in this repository**: an application must inject one before sessions can be persisted at all.
+
+Recovery-code verification is deliberately *not* wired to any storage. Comparing a code on the client means handing the client the hash list to compare against, so the Firestore rules close that path; a trusted server has to own the check.
 
 ## Tests
 

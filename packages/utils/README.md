@@ -34,7 +34,7 @@ sumAmounts([0.1, 0.2]);        // 0.3 — not 0.30000000000000004
 
 | Export | What it does |
 | --- | --- |
-| `createLogger`, `logger`, `redact` | Logging that redacts sensitive keys before anything is emitted |
+| `createLogger`, `logger`, `redact`, `redactText` | Logging that allowlists loggable keys and masks identifiers in free text |
 | `CodedError`, `isCodedError`, `errorCode` | Typed, coded errors and structural narrowing |
 | `Result`, `ok`, `err`, `unwrapOr` | Explicit success/failure without exceptions |
 | `formatCurrency`, `parseAmount`, `toMinorUnits`, `sumAmounts` | Money formatting and float-safe arithmetic |
@@ -52,6 +52,8 @@ None. This package must stay free of configuration so everything else can depend
 Nothing internal.
 
 ## Limitations
+
+Redaction is an **allowlist**: a context key that is not explicitly known to be safe is replaced wholesale, so adding a field to a domain type can never silently start logging it. Messages are scanned for email addresses and long digit runs. The default level is `warn`.
 
 `createId` is not cryptographically secret — use `@platform/security` for anything that must be unguessable. Date helpers work in UTC; render with a locale at the edge.
 

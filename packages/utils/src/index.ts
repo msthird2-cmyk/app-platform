@@ -8,6 +8,7 @@ export {
   createLogger,
   logger,
   redact,
+  redactText,
   REDACTED,
 } from './logger';
 export {

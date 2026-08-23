@@ -58,6 +58,10 @@ Applications supply the collection list, the passphrase and the backup interval.
 
 Only the encrypted payload leaves the device; the passphrase is never uploaded, so a lost passphrase means an unreadable backup. Restore overwrites local records and requires explicit confirmation.
 
+`runBackup` rejects a weak passphrase before reading any data — PBKDF2 raises the cost per guess but cannot rescue a guessable secret. Backup identifiers are random rather than derived from a timestamp, so two backups in the same millisecond cannot collide, and the storage rules refuse to overwrite an existing object.
+
+`runRestore` requires the owner, the application name and the collection allowlist. A bundle belonging to another account or another application fails the integrity check rather than decrypting, and a bundle naming a collection the application does not own is refused before any write.
+
 ## Tests
 
 ```

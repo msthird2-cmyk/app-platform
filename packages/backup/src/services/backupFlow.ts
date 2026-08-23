@@ -1,4 +1,4 @@
-import { createLogger } from '@platform/utils';
+import { createId, createLogger } from '@platform/utils';
 import {
   buildExportBundle,
   decryptExportBundle,
@@ -7,7 +7,7 @@ import {
   type Repository,
   type SyncableRecord,
 } from '@platform/data';
-import type { CryptoService } from '@platform/security';
+import { assertStrongPassphrase, type CryptoService } from '@platform/security';
 import { BackupError, BackupErrorCode } from '../errors';
 import type { BackupProgress, BackupService, BackupSummary } from '../types/backup';
 
@@ -15,6 +15,8 @@ const log = createLogger({ scope: 'backup' });
 
 export interface RunBackupOptions {
   appName: string;
+  /** Owner of the data. Bound into the ciphertext as authenticated data. */
+  userId: string;
   collections: readonly string[];
   passphrase: string;
   now: number;
@@ -29,6 +31,9 @@ export async function runBackup(
 ): Promise<BackupSummary> {
   const { onProgress } = options;
   if (options.passphrase.length === 0) throw new BackupError(BackupErrorCode.PASSPHRASE_REQUIRED);
+  // A weak passphrase defeats every other control on this path, so it is
+  // rejected before any data is read.
+  assertStrongPassphrase(options.passphrase);
 
   try {
     onProgress?.({ phase: 'collecting', completion: 0.1 });
@@ -42,10 +47,16 @@ export async function runBackup(
 
     onProgress?.({ phase: 'encrypting', completion: 0.5 });
     const bundle = buildExportBundle(options.appName, collections, options.now);
-    const encrypted = await encryptExportBundle(bundle, options.passphrase, crypto);
+    const encrypted = await encryptExportBundle(bundle, options.passphrase, crypto, {
+      userId: options.userId,
+      appName: options.appName,
+    });
 
     onProgress?.({ phase: 'uploading', completion: 0.8 });
+    // A random identifier rather than a timestamp: two backups in the same
+    // millisecond must not collide, and the id reaches a storage path.
     const summary = await backups.upload(encrypted, {
+      id: createId(20),
       createdAt: options.now,
       sizeBytes: encrypted.payload.ciphertext.length,
       recordCount,
@@ -64,6 +75,11 @@ export async function runBackup(
 
 export interface RunRestoreOptions {
   backupId: string;
+  /** Must match the owner the bundle was encrypted for. */
+  userId: string;
+  appName: string;
+  /** Only these collection names may be written by a restore. */
+  collections: readonly string[];
   passphrase: string;
   /** Restoring overwrites local records, so it needs explicit confirmation. */
   confirmed: boolean;
@@ -84,7 +100,17 @@ export async function runRestore(
     const encrypted = await backups.download(options.backupId);
 
     options.onProgress?.({ phase: 'encrypting', completion: 0.5 });
-    const bundle = await decryptExportBundle(encrypted, options.passphrase, crypto);
+    const bundle = await decryptExportBundle(encrypted, options.passphrase, crypto, {
+      userId: options.userId,
+      appName: options.appName,
+    });
+
+    // Collection names come out of a decrypted bundle and are not trusted:
+    // only the application's own collections may be written.
+    const allowed = new Set(options.collections);
+    for (const collection of Object.keys(bundle.collections)) {
+      if (!allowed.has(collection)) throw new BackupError(BackupErrorCode.BACKUP_CORRUPT);
+    }
 
     options.onProgress?.({ phase: 'uploading', completion: 0.8 });
     let restored = 0;

@@ -12,7 +12,12 @@ const log = createLogger({ scope: 'account:delete' });
 export interface DeleteAccountOptions {
   /** The user has explicitly confirmed. Deletion never runs without it. */
   confirmed: boolean;
-  /** Some backends demand a fresh credential before deleting the account. */
+  /**
+   * Defaults to **true**. Firebase refuses `deleteUser` without a recent
+   * login, and discovering that at the final step would mean the data was
+   * already destroyed while the account survived. Re-authenticating first
+   * makes the failure happen while everything is still recoverable.
+   */
   requiresReauthentication?: boolean;
 }
 
@@ -36,10 +41,19 @@ export async function deleteAccountFlow(
 
   step('confirm');
 
-  if (options.requiresReauthentication) {
+  if (options.requiresReauthentication ?? true) {
     if (!callbacks.reauthenticate) throw new AccountError(AccountErrorCode.REAUTHENTICATION_REQUIRED);
     await callbacks.reauthenticate();
     step('reauthenticate');
+  }
+
+  // Written before anything is destroyed, so an interrupted deletion is
+  // detectable and resumable rather than silently half-done.
+  try {
+    await service.beginDeletion();
+    step('journal');
+  } catch (cause) {
+    throw new AccountError(AccountErrorCode.DATA_DELETION_FAILED, cause);
   }
 
   try {

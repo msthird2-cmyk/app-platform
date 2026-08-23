@@ -19,6 +19,7 @@ export class InMemoryAccountService implements AccountService {
   private backups: unknown[] = [{ id: 'seed-backup' }];
   private secondary: unknown[] = [{ id: 'seed-device' }];
   private accountExists = true;
+  private deletionStarted = false;
 
   constructor(private readonly options: InMemoryAccountOptions) {
     this.profile = options.profile;
@@ -38,6 +39,15 @@ export class InMemoryAccountService implements AccountService {
   async updateProfile(changes: { displayName?: string }): Promise<UserProfile> {
     this.profile = { ...this.profile, ...changes };
     return this.profile;
+  }
+
+  async beginDeletion(): Promise<void> {
+    this.calls.push('beginDeletion');
+    this.deletionStarted = true;
+  }
+
+  async hasPendingDeletion(): Promise<boolean> {
+    return this.deletionStarted;
   }
 
   async deleteUserData(): Promise<void> {
@@ -72,5 +82,10 @@ export class InMemoryAccountService implements AccountService {
       secondary: this.secondary.length,
       account: this.accountExists,
     };
+  }
+
+  /** Service calls that actually destroy something, in the order they ran. */
+  get destructiveCalls(): string[] {
+    return this.calls.filter((call) => call !== 'beginDeletion');
   }
 }

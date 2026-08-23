@@ -9,7 +9,8 @@ import {
 import { DataErrorCode } from '../src/errors';
 import { WebCryptoService } from '@platform/security';
 
-const crypto = new WebCryptoService(1000);
+const crypto = new WebCryptoService(100_000);
+const CONTEXT = { userId: 'user-1', appName: 'Net Worth' };
 
 const bundle = buildExportBundle(
   'Net Worth',
@@ -19,19 +20,19 @@ const bundle = buildExportBundle(
 
 describe('export bundles', () => {
   it('encrypts the whole bundle, leaving no plaintext record', async () => {
-    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto);
+    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto, CONTEXT);
     expect(JSON.stringify(encrypted)).not.toContain('a1');
     expect(encrypted.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
   });
 
   it('round-trips', async () => {
-    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto);
-    await expect(decryptExportBundle(encrypted, 'passphrase', crypto)).resolves.toEqual(bundle);
+    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto, CONTEXT);
+    await expect(decryptExportBundle(encrypted, 'passphrase', crypto, CONTEXT)).resolves.toEqual(bundle);
   });
 
   it('fails on the wrong passphrase', async () => {
-    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto);
-    await expect(decryptExportBundle(encrypted, 'wrong', crypto)).rejects.toMatchObject({
+    const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto, CONTEXT);
+    await expect(decryptExportBundle(encrypted, 'wrong', crypto, CONTEXT)).rejects.toMatchObject({
       domain: 'security',
     });
   });
@@ -48,6 +49,20 @@ describe('parseExportBundle', () => {
     expect(() =>
       parseExportBundle({ ...bundle, collections: { assets: [{ id: 'a1' }] } }),
     ).toThrowError(expect.objectContaining({ code: DataErrorCode.RECORD_INVALID }));
+  });
+
+  it('rejects a reserved collection name', () => {
+    // `__proto__` as a dynamic key would otherwise replace the accumulator's
+    // prototype rather than becoming an entry.
+    const hostile = JSON.parse('{"__proto__": [], "assets": []}') as Record<string, unknown>;
+    expect(() => parseExportBundle({ ...bundle, collections: hostile })).toThrowError(
+      expect.objectContaining({ code: DataErrorCode.IMPORT_INVALID }),
+    );
+  });
+
+  it('builds collections on a null prototype', () => {
+    const parsed = parseExportBundle(JSON.parse(JSON.stringify(bundle)));
+    expect(Object.getPrototypeOf(parsed.collections)).toBeNull();
   });
 
   it('rejects a non-object payload', () => {
