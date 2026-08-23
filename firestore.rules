@@ -29,6 +29,32 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.get('email_verified', false) == true;
     }
 
+    // ---- reserved fields -------------------------------------------------
+
+    // Ownership, role and entitlement state is decided by the token and by a
+    // trusted server. A client that can write these names into its own
+    // document can later be mistaken for privileged by any code — client,
+    // rule, or future backend — that reads them back, and `resource.data.role`
+    // reads exactly like a claim at the point of use.
+    //
+    // A domain record is deliberately open-ended, so this is a denylist rather
+    // than an allowlist: an application may add any field it likes except one
+    // that could be confused for authorization state. The stronger allowlist
+    // form is already used where the shape is known (`isProfileShape`,
+    // `isBackupSummary`); extending it to records is a schema change, not a
+    // rules change, and waits for the encrypted record envelope.
+    //
+    // `hasAny` matches whole keys, so a legitimate `planName` or
+    // `userIdentifier` is unaffected.
+    function hasNoReservedFields() {
+      return !request.resource.data.keys().hasAny([
+        'ownerId', 'userId', 'uid',
+        'isAdmin', 'admin', 'role', 'roles',
+        'permissions', 'entitlements', 'plan', 'claims',
+        'isVerified', 'emailVerified', 'createdBy'
+      ]);
+    }
+
     // ---- record collections ---------------------------------------------
 
     // The collections applications are allowed to store records in. A restore
@@ -76,9 +102,11 @@ service cloud.firestore {
     match /users/{uid}/{collection}/{docId} {
       allow get, list: if isOwner(uid) && isRecordCollection(collection);
       allow create: if isOwner(uid) && isVerified()
-                    && isRecordCollection(collection) && isCreatingRecord(docId);
+                    && isRecordCollection(collection) && isCreatingRecord(docId)
+                    && hasNoReservedFields();
       allow update: if isOwner(uid) && isVerified()
-                    && isRecordCollection(collection) && isUpdatingRecord(docId);
+                    && isRecordCollection(collection) && isUpdatingRecord(docId)
+                    && hasNoReservedFields();
       // Hard delete is permitted only so account deletion can remove the
       // subtree; ordinary removal goes through the tombstone above.
       allow delete: if isOwner(uid) && isRecordCollection(collection);
@@ -134,12 +162,19 @@ service cloud.firestore {
 
     // ---- secondary records -----------------------------------------------
 
+    // `write` is split into create/update/delete deliberately: on a delete
+    // `request.resource` is null, so a field check written against a combined
+    // `write` grant would fail to evaluate rather than pass.
     match /users/{uid}/devices/{deviceId} {
-      allow read, write: if isOwner(uid);
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && hasNoReservedFields();
+      allow delete: if isOwner(uid);
     }
 
     match /users/{uid}/settings/{docId} {
-      allow read, write: if isOwner(uid);
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && hasNoReservedFields();
+      allow delete: if isOwner(uid);
     }
 
     // ---- client-inaccessible -------------------------------------------

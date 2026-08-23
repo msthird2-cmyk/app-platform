@@ -347,3 +347,217 @@ describe('paths closed to every client', () => {
     await assertFails(setDoc(doc(db, 'admin/config'), { open: true }));
   });
 });
+
+/**
+ * P0-9. Ownership, role and entitlement state is decided by the token and by a
+ * trusted server; a client that can write those names into its own document
+ * can later be mistaken for privileged by any code that reads them back. The
+ * domain record model stays open-ended, so this is a denylist rather than an
+ * allowlist — every field below is refused on every user-controlled surface.
+ */
+const RESERVED = [
+  'ownerId',
+  'userId',
+  'uid',
+  'isAdmin',
+  'admin',
+  'role',
+  'roles',
+  'permissions',
+  'entitlements',
+  'plan',
+  'claims',
+  'isVerified',
+  'emailVerified',
+  'createdBy',
+] as const;
+
+/** What an attacker would actually put there, rather than a placeholder. */
+const HOSTILE: Record<(typeof RESERVED)[number], unknown> = {
+  ownerId: BOB,
+  userId: BOB,
+  uid: BOB,
+  isAdmin: true,
+  admin: true,
+  role: 'admin',
+  roles: ['admin', 'owner'],
+  permissions: ['*'],
+  entitlements: ['pro'],
+  plan: 'enterprise',
+  claims: { admin: true },
+  isVerified: true,
+  emailVerified: true,
+  createdBy: BOB,
+};
+
+describe('reserved security fields', () => {
+  describe('domain records', () => {
+    it.each(RESERVED)('denies "%s" on create', async (field) => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { [field]: HOSTILE[field] }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+
+    it.each(RESERVED)('denies "%s" on update', async (field) => {
+      await seedRecord(ALICE, 'assets', 'a1');
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { revision: 2, [field]: HOSTILE[field] }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+  });
+
+  describe('devices', () => {
+    it.each(RESERVED)('denies "%s" on create', async (field) => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/devices/d1`), {
+          name: 'Pixel 8',
+          [field]: HOSTILE[field],
+        }),
+      );
+    });
+
+    it.each(RESERVED)('denies "%s" on update', async (field) => {
+      await env.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), `users/${ALICE}/devices/d1`), { name: 'Pixel 8' });
+      });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/devices/d1`), {
+          name: 'Pixel 8',
+          [field]: HOSTILE[field],
+        }),
+      );
+    });
+  });
+
+  describe('settings', () => {
+    it.each(RESERVED)('denies "%s" on create', async (field) => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/settings/app`), {
+          theme: 'dark',
+          [field]: HOSTILE[field],
+        }),
+      );
+    });
+
+    it.each(RESERVED)('denies "%s" on update', async (field) => {
+      await env.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), `users/${ALICE}/settings/app`), { theme: 'dark' });
+      });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/settings/app`), {
+          theme: 'dark',
+          [field]: HOSTILE[field],
+        }),
+      );
+    });
+  });
+
+  // No deny-rule is complete without a positive test. Two things have to stay
+  // true: the ordinary write still works, and the match is on the whole key —
+  // a denylist that caught substrings would break every legitimate field whose
+  // name merely contains one of these words.
+  describe('legitimate writes still succeed', () => {
+    it('allows an ordinary domain record on create and update', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { name: 'Savings', amount: 1000 }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+      await assertSucceeds(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { revision: 2, name: 'Savings', amount: 2000 }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+
+    it('allows domain fields whose names merely contain a reserved word', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(
+        setDoc(doc(db, `users/${ALICE}/assets/a2`), {
+          ...record('a2', {
+            userIdentifier: 'not-a-uid',
+            planName: 'Retirement plan',
+            roleDescription: 'primary residence',
+            adminNotes: 'reviewed',
+            permissionsNote: 'n/a',
+          }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+
+    it('allows an ordinary device document and still allows deleting it', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(
+        setDoc(doc(db, `users/${ALICE}/devices/d1`), { name: 'Pixel 8', lastSeenAt: 1 }),
+      );
+      await assertSucceeds(deleteDoc(doc(db, `users/${ALICE}/devices/d1`)));
+    });
+
+    it('allows an ordinary settings document and still allows deleting it', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(
+        setDoc(doc(db, `users/${ALICE}/settings/app`), { theme: 'dark', currency: 'INR' }),
+      );
+      await assertSucceeds(deleteDoc(doc(db, `users/${ALICE}/settings/app`)));
+    });
+
+    it('still lets the owner read devices and settings', async () => {
+      await env.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), `users/${ALICE}/devices/d1`), { name: 'Pixel 8' });
+        await setDoc(doc(context.firestore(), `users/${ALICE}/settings/app`), { theme: 'dark' });
+      });
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(getDoc(doc(db, `users/${ALICE}/devices/d1`)));
+      await assertSucceeds(getDoc(doc(db, `users/${ALICE}/settings/app`)));
+    });
+  });
+
+  // The new field check must not become the only thing standing between Bob
+  // and Alice's data: a clean document from the wrong user is still refused.
+  describe('ownership is still enforced independently', () => {
+    it('denies Bob a reserved-field-free write to Alice devices and settings', async () => {
+      const db = verified(env, BOB).firestore();
+      await assertFails(setDoc(doc(db, `users/${ALICE}/devices/d1`), { name: 'Planted' }));
+      await assertFails(setDoc(doc(db, `users/${ALICE}/settings/app`), { theme: 'dark' }));
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { name: 'Planted' }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+
+    it('denies an unverified owner a reserved-field-free record write', async () => {
+      const db = unverified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/assets/a1`), {
+          ...record('a1', { name: 'Savings' }),
+          updatedAt: serverTimestamp(),
+        }),
+      );
+    });
+
+    it('still denies collection group queries over every user-controlled path', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(getDocs(collectionGroup(db, 'assets')));
+      await assertFails(getDocs(collectionGroup(db, 'devices')));
+      await assertFails(getDocs(collectionGroup(db, 'settings')));
+    });
+  });
+});

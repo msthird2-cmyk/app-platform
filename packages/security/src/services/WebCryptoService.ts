@@ -1,4 +1,18 @@
 import { SecurityError, SecurityErrorCode } from '../errors';
+import { fromBase64, toBase64 } from '../crypto/base64';
+import {
+  IV_BYTES,
+  KEY_LENGTH_BITS,
+  PAYLOAD_VERSION,
+  SALT_BYTES,
+  SECRET_HASH_VERSION,
+  additionalData,
+  assertSupportedPayload,
+  assertSupportedSecretHash,
+  equalsConstantTime,
+} from '../crypto/envelope';
+import { utf8Decode, utf8Encode } from '../crypto/utf8';
+import { DEFAULT_KDF_ITERATIONS, assertAllowedIterationCount } from '../kdfPolicy';
 import type {
   CryptoService,
   EncryptedPayload,
@@ -6,94 +20,32 @@ import type {
   SecretHash,
 } from '../types/crypto';
 
-const ITERATIONS = 210_000;
-const KEY_LENGTH = 256;
-const PAYLOAD_VERSION = 1;
-const SECRET_HASH_VERSION = 1;
-const SALT_BYTES = 16;
-const IV_BYTES = 12;
-
-/** Guards against a hostile payload steering the key-derivation cost. */
-const MIN_ITERATIONS = 100_000;
-const MAX_ITERATIONS = 1_000_000;
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function fromBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 function randomBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
   globalThis.crypto.getRandomValues(bytes);
   return bytes;
 }
 
-/** Comparison whose duration does not depend on where the first difference is. */
-function equalsConstantTime(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let difference = 0;
-  for (let i = 0; i < a.length; i += 1) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return difference === 0;
-}
-
 /**
- * Binds the envelope to the ciphertext. Anything an attacker could otherwise
- * edit freely — the owner, the application, the algorithm, the cost — is
- * authenticated, so tampering fails the GCM tag rather than silently changing
- * how the payload is read.
- */
-function additionalData(
-  context: EncryptionContext,
-  iterations: number,
-  version: number,
-): Uint8Array {
-  return new TextEncoder().encode(
-    JSON.stringify({
-      v: version,
-      alg: 'AES-GCM',
-      kdf: 'PBKDF2-SHA256',
-      it: iterations,
-      uid: context.userId,
-      app: context.appName,
-    }),
-  );
-}
-
-function assertSupportedPayload(payload: EncryptedPayload): void {
-  if (payload.version !== PAYLOAD_VERSION) {
-    throw new SecurityError(SecurityErrorCode.ENCRYPTION_VERSION_UNSUPPORTED);
-  }
-  if (payload.algorithm !== 'AES-GCM') {
-    throw new SecurityError(SecurityErrorCode.ENCRYPTION_ALGORITHM_UNSUPPORTED);
-  }
-  if (
-    typeof payload.iterations !== 'number' ||
-    !Number.isInteger(payload.iterations) ||
-    payload.iterations < MIN_ITERATIONS ||
-    payload.iterations > MAX_ITERATIONS
-  ) {
-    throw new SecurityError(SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID);
-  }
-}
-
-/**
- * AES-256-GCM with a PBKDF2-SHA256 derived key. Available on web and on React
- * Native runtimes that expose WebCrypto; native builds inject a keystore-backed
- * implementation of the same interface instead.
+ * AES-256-GCM with a PBKDF2-SHA256 derived key, over WebCrypto.
+ *
+ * This is the web implementation. It is preferred wherever WebCrypto exists,
+ * because `deriveKey` returns a non-extractable `CryptoKey` — the derived key
+ * is never a JavaScript value, so it cannot be read out of a heap dump or
+ * logged by accident. React Native has no WebCrypto, and
+ * `PortableCryptoService` serves that target with an identical envelope.
  *
  * No cryptography is implemented here — every primitive comes from WebCrypto.
  */
 export class WebCryptoService implements CryptoService {
-  constructor(private readonly iterations: number = ITERATIONS) {
-    if (iterations < 1) throw new SecurityError(SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID);
+  private readonly iterations: number;
+
+  constructor(iterations: number = DEFAULT_KDF_ITERATIONS) {
+    // The configuration is held to the same policy the read path enforces. A
+    // service that accepted a cost here which `assertSupportedPayload` later
+    // refused would produce backups it could not itself restore.
+    assertAllowedIterationCount(iterations);
+    this.iterations = iterations;
   }
 
   private async deriveKey(
@@ -104,7 +56,7 @@ export class WebCryptoService implements CryptoService {
     try {
       const material = await globalThis.crypto.subtle.importKey(
         'raw',
-        new TextEncoder().encode(passphrase),
+        utf8Encode(passphrase) as BufferSource,
         'PBKDF2',
         false,
         ['deriveKey'],
@@ -112,7 +64,7 @@ export class WebCryptoService implements CryptoService {
       return await globalThis.crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
         material,
-        { name: 'AES-GCM', length: KEY_LENGTH },
+        { name: 'AES-GCM', length: KEY_LENGTH_BITS },
         // Not extractable: the derived key cannot be read back out.
         false,
         ['encrypt', 'decrypt'],
@@ -139,7 +91,7 @@ export class WebCryptoService implements CryptoService {
           additionalData: additionalData(context, this.iterations, PAYLOAD_VERSION) as BufferSource,
         },
         key,
-        new TextEncoder().encode(plaintext),
+        utf8Encode(plaintext) as BufferSource,
       );
       return {
         ciphertext: toBase64(new Uint8Array(ciphertext)),
@@ -177,7 +129,7 @@ export class WebCryptoService implements CryptoService {
         key,
         fromBase64(payload.ciphertext) as BufferSource,
       );
-      return new TextDecoder().decode(plaintext);
+      return utf8Decode(new Uint8Array(plaintext));
     } catch (cause) {
       if (cause instanceof SecurityError) throw cause;
       throw new SecurityError(SecurityErrorCode.DECRYPTION_FAILED, cause);
@@ -187,7 +139,7 @@ export class WebCryptoService implements CryptoService {
   async hash(value: string): Promise<string> {
     const digest = await globalThis.crypto.subtle.digest(
       'SHA-256',
-      new TextEncoder().encode(value),
+      utf8Encode(value) as BufferSource,
     );
     return toBase64(new Uint8Array(digest));
   }
@@ -200,7 +152,7 @@ export class WebCryptoService implements CryptoService {
     try {
       const material = await globalThis.crypto.subtle.importKey(
         'raw',
-        new TextEncoder().encode(secret),
+        utf8Encode(secret) as BufferSource,
         'PBKDF2',
         false,
         ['deriveBits'],
@@ -208,7 +160,7 @@ export class WebCryptoService implements CryptoService {
       const bits = await globalThis.crypto.subtle.deriveBits(
         { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
         material,
-        256,
+        KEY_LENGTH_BITS,
       );
       return new Uint8Array(bits);
     } catch (cause) {
@@ -229,16 +181,7 @@ export class WebCryptoService implements CryptoService {
   }
 
   async verifySecret(secret: string, stored: SecretHash): Promise<boolean> {
-    if (stored.version !== SECRET_HASH_VERSION || stored.algorithm !== 'PBKDF2-SHA256') {
-      throw new SecurityError(SecurityErrorCode.ENCRYPTION_VERSION_UNSUPPORTED);
-    }
-    if (
-      !Number.isInteger(stored.iterations) ||
-      stored.iterations < MIN_ITERATIONS ||
-      stored.iterations > MAX_ITERATIONS
-    ) {
-      throw new SecurityError(SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID);
-    }
+    assertSupportedSecretHash(stored);
     const candidate = await this.deriveDigest(secret, fromBase64(stored.salt), stored.iterations);
     return equalsConstantTime(candidate, fromBase64(stored.digest));
   }

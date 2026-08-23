@@ -7,6 +7,22 @@ export type {
 } from './types/crypto';
 export type { SecureStorage, BiometricsService } from './types/storage';
 export { WebCryptoService } from './services/WebCryptoService';
+export {
+  createCryptoService,
+  type CreateCryptoServiceOptions,
+} from './services/createCryptoService';
+export {
+  PortableCryptoService,
+  type PortableCryptoOptions,
+  type RandomBytes,
+} from './services/PortableCryptoService';
+export {
+  MIN_KDF_ITERATIONS,
+  MAX_KDF_ITERATIONS,
+  DEFAULT_KDF_ITERATIONS,
+  isAllowedIterationCount,
+  assertAllowedIterationCount,
+} from './kdfPolicy';
 export { InMemorySecureStorage, UnavailableBiometrics } from './services/InMemorySecureStorage';
 export {
   type RecoveryCodeRecord,
