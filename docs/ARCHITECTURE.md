@@ -1,80 +1,62 @@
 # Architecture
 
-`CLAUDE.md` states the rules. This document explains why they are what they are.
+`CLAUDE.md` states the operative rules. This document explains the architecture, threat model, Firebase Spark limitations, and the controls required before real user data is introduced.
 
-## The problem
+## Platform goal
 
-Three financial applications share far more than they differ. Authentication,
-account management, deletion, backup, encryption, theming and synchronization
-are the same product decisions in all three; only net worth calculation,
-portfolio analytics and expense categorization differ. Built as three codebases,
-the shared 80% would drift into three subtly different versions and every
-security fix would have to be made three times.
+This is a reusable financial-app platform. Authentication, account management, deletion, backup, encryption, theming, session handling and synchronization are built once in `packages/`. Apps contain only their own domain logic.
 
-So: one repository, one shared platform, three thin applications.
+The platform must make the secure path the easiest path: shared components should not need app-specific security forks, and a new app should inherit the same security controls by composing the shared services.
 
-## Shared or application-specific
+## Shared vs application-specific
 
-The dividing line is **domain**, not convenience.
+The dividing line is domain, not convenience.
 
-Anything another financial application could reasonably reuse belongs in
-`packages/`: login, signup, delete account, backup, restore, theme, buttons,
-dialogs, encryption, recovery codes, session management, generic validation.
+Shared: login, signup, password reset, email verification, account deletion, delete-data, backup/restore, theme, dialogs, encryption, recovery codes, secure storage, session handling and generic validation.
 
-Anything that exists because of one application's business domain belongs in
-`apps/<name>/`: net worth calculation, asset categories, portfolio performance,
-expense categorization, budget rules.
+App-specific: net-worth calculation, asset categories, portfolio performance, expense categorization and budget rules.
 
-When it is not obvious, build it in the application. When a second application
-needs it, extract the generic part, move it, delete the duplication, add tests
-and update the README. Premature generalization produces a shared component with
-three sets of conditional behaviour, which is worse than two copies.
-
-The corollary is one configurable component rather than per-app forks:
-
-```tsx
-<DeleteAccount title="Delete Account" requireConfirmation onDelete={handleDelete} />
-```
-
-not `NetWorthDeleteAccount` / `InvestmentDeleteAccount` / `ExpenseDeleteAccount`.
+When uncertain, build app-specific first. On second use, extract the generic part, remove duplication, add tests and update the README. Do not create per-app security forks.
 
 ## Dependency direction
 
-Imports flow one way. The table in `CLAUDE.md` is authoritative and is encoded
-once in `eslint.config.mjs`, which generates a per-package `no-restricted-imports`
-override from it — so a violation fails lint rather than review, and the table
-and its enforcement cannot drift apart.
-
-```
-utils  ←  theme, security
-       ←  ui (also theme)
-       ←  data (also security)
-       ←  auth (ui, theme, security)
-       ←  account (ui, theme, data)
-       ←  backup (ui, theme, data, security)
-core   →  anything
-apps/* →  anything
+```text
+utils  ← theme, security
+       ← ui
+       ← data
+       ← auth
+       ← account
+       ← backup
+firebase ← interfaces/types only
+core    → any shared package
+apps/*  → any shared package
 ```
 
-Two consequences worth naming:
+`packages/` never imports `apps/`. `packages/firebase` contains client implementations only and never imports UI components/hooks. `core` composes services but contains no app business rules.
 
-- **`account` does not depend on `auth`.** Deleting an account may require
-  re-authentication, which looks like an `auth` dependency. Instead the flow
-  takes a `reauthenticate` callback, so the account package stays independent of
-  how authentication happens.
-- **Nothing in `packages/` may import from `apps/`.** A shared package that
-  reaches into an application is no longer shared.
+Dependency boundaries are enforced by lint and architecture checks. If implementation appears to require weakening those checks, stop and fix the design rather than the enforcement.
 
-Circular dependencies are prohibited. When one appears, the fix is to identify
-the shared abstraction and move it to a lower-level package — never to disable
-the check.
+## Threat model
+
+Treat every client as attacker-controlled. A user can inspect and modify the APK/web bundle, call Firebase APIs directly, alter client-side validation, change timestamps/revisions, replay requests and attempt to access another user's paths.
+
+Therefore:
+
+```text
+UI validation      = UX only
+TypeScript         = developer safety only
+Service interfaces = architecture only
+App Check          = abuse/authenticity layer
+Encryption         = confidentiality/integrity layer
+Firebase Rules     = authorization boundary
+Trusted backend    = server-authoritative decisions when Rules cannot express them
+```
+
+No client-side control may be the sole protection for financial data.
 
 ## Firebase Spark architecture
 
-The current product intentionally uses Firebase Spark and therefore uses the
-Firebase client SDK directly rather than requiring a paid server/backend.
-
-The normal path is:
+The initial product is intentionally client-first:
 
 ```text
 Component
@@ -85,279 +67,321 @@ Firebase Client Service
   ↓
 Firebase Client SDK
   ↓
-Firebase Authentication / Firestore / Storage
+Firebase Auth / Firestore / Storage
 ```
 
-This is secure only when the client is treated as untrusted. Firebase client code
-is not a security boundary. A malicious user can modify the application and call
-Firebase directly. Therefore Firebase Security Rules are the authoritative
-authorization layer.
+Firebase client configuration is public by design. API keys and project IDs are identifiers, not server credentials. Never ship Admin SDK credentials, service-account JSON, private keys or backend secrets.
 
-The repository may contain Firebase client configuration such as project ID,
-app ID, and API keys in the client bundle. These values are identifiers/configuration,
-not server credentials. Firebase Admin SDK, service-account JSON, private keys, and
-other server secrets must never be included in the client dependency graph.
+Spark is acceptable for the initial product, but it does not remove the need for server-side security boundaries. If a requirement needs a secret or decision that must not be available to the client, do not fake it with Firestore documents or client code.
 
-If a future requirement needs trusted server authority, introduce a separate
-`backend/` outside the client dependency graph. Apps must never import backend code.
-The existing service interfaces should remain stable so a future API implementation
-can replace a direct Firebase client implementation without rewriting shared UI.
-Do not introduce a backend merely for architectural fashion; Spark is the current
-supported deployment model.
+### Spark capability boundary
 
-## Firebase Security Rules are the security boundary
+Rules can enforce ownership, allowed fields, document structure, immutable fields and many state transitions. They cannot provide arbitrary trusted secret issuance, general-purpose rate limiting, guaranteed post-account recursive deletion, or other server-only workflows.
 
-Every private Firestore collection and Storage path must be explicitly protected.
-Rules are deny-by-default and independently enforce:
+If the product later requires these controls, the architecture supports a separate trusted `backend/` using Firebase Admin SDK. It must remain outside the client dependency graph and behind the existing domain service interfaces. Moving to Blaze/backend is a deliberate security decision, not an excuse to weaken the Spark design.
 
-1. Authentication — the caller must be signed in when the resource is private.
-2. Ownership — access is scoped to `request.auth.uid` or another trusted ownership
-   mechanism, never a client-provided identity.
-3. Operation — read, create, update, and delete permissions are considered separately.
-4. Data validation — writable fields and document structure are constrained where
-   practical.
-5. Immutable security fields — ownership, creator identity, and security status cannot
-   be changed by an ordinary client.
-6. Administrative privileges — clients cannot assign themselves admin/verified roles.
+## Security Rules are mandatory
 
-Never use broad rules such as:
+Rules must be stored in Git and deny by default. Console-only rules are not considered part of the architecture.
+
+Required repository infrastructure:
 
 ```text
-allow read, write: if true;
-allow read, write: if request.auth != null;
+firebase.json
+firestore.rules
+firestore.indexes.json
+storage.rules
+Firebase Emulator Suite configuration/tests
 ```
 
-for private financial data.
+Every private resource must have:
 
-A new Firestore collection or Storage path is incomplete until its Security Rules and
-negative authorization tests are added.
+1. authentication requirement
+2. ownership check from `request.auth.uid`
+3. operation-specific authorization
+4. field/document validation
+5. immutable security fields
+6. negative tests proving unauthorized access fails
 
-## User data isolation
+Never use `allow read, write: if true` or broad authenticated-user access for private financial data.
 
-Financial records are private user-owned data unless explicitly documented otherwise.
-A structure such as the following makes ownership straightforward:
+### Firestore ownership model
+
+Preferred structure:
 
 ```text
-users/{uid}/assets/...
-users/{uid}/liabilities/...
-users/{uid}/settings/...
-users/{uid}/backups/...
+users/{uid}/{collection}/{docId}
 ```
 
-The important security property is not the exact path; it is that Security Rules derive
-ownership from the authenticated identity and never trust a client-provided `uid`.
+Rules must independently verify:
 
-A user must not be able to read, write, delete, query, or infer another user's private
-financial data or backup objects.
+- authenticated caller owns `uid`
+- collection is an explicit application allowlist
+- document ID matches the record ID
+- profile writes use an explicit client-writable field allowlist
+- ownership, role, verification and security fields cannot be client-written
+- server timestamps are used for authoritative synchronization metadata
+- revisions follow the allowed state transition
+- tombstones cannot be resurrected by stale client writes
+- device-verification/recovery-verification documents cannot be read or modified by clients
+- backup metadata cannot contain financial record payloads
 
-## Authentication and device verification
+### Storage ownership model
 
-Firebase Authentication is the identity system. Passwords are never stored in Firestore.
-Use Firebase-supported authentication, password reset, email verification and
-reauthentication mechanisms rather than building a parallel password system.
+Preferred structure:
 
-Custom device verification requires special care on Spark. Never write an expected
-verification code into a Firestore document that the same client can read and compare.
-That makes the verification secret available to the attacker.
+```text
+users/{uid}/backups/{opaqueId}.json
+```
 
-Any custom challenge must be short-lived, single-use, protected from unauthorized reads,
-and resistant to replay/brute force using the available Firebase mechanisms. Prefer
-Firebase Authentication mechanisms where they satisfy the requirement. If trusted
-server-side verification becomes necessary, that is a reason to introduce a backend,
-not to weaken the client security model.
+Storage Rules independently enforce authentication, ownership, operation type, size/content-type limits and a strict filename allowlist. Encryption does not replace authorization: encrypted data can still be deleted or corrupted if Storage Rules are weak.
+
+## App Check
+
+Enable Firebase App Check where supported. For native builds use an appropriate platform attestation provider; for web use the supported App Check provider for the deployment. Debug providers must be development-only.
+
+App Check is not authorization and is never the only control. Rules must remain secure if App Check is bypassed.
+
+## Authentication
+
+Use Firebase Authentication for identity. Required flows include signup, login, logout, password reset, email verification and recent reauthentication for destructive/sensitive actions.
+
+Signup must send email verification and the product should provide resend. Sensitive financial writes may require `request.auth.token.email_verified` in Rules once the product policy is enabled.
+
+Client password validation is UX. If a password policy is required, configure Firebase Authentication's server-side password policy as well.
+
+Enable Firebase Auth protections against email enumeration where available and keep sensitive auth errors generic.
+
+## Device verification
+
+A custom device verification flow must never be:
+
+```text
+client writes expected code
+→ client reads expected code
+→ client compares code
+→ client writes verified
+```
+
+That is client-authoritative and provides no security boundary.
+
+On Spark, prefer Firebase Authentication capabilities. If a custom challenge requires trusted issuance/comparison or reliable rate limiting, defer it or introduce a trusted backend. A Firestore document containing the expected secret must never be client-readable.
 
 ## Recovery codes
 
-Recovery codes are authentication/recovery secrets. They are generated using a
-cryptographically secure random generator and never with `Math.random()`.
+Recovery codes are account-recovery secrets and must be generated with CSPRNG.
 
-The plaintext code is shown only when required and is never logged, sent to analytics,
-placed in a URL, or persisted as plaintext. Stored verification material is a
-cryptographic hash, and verification is single-use.
+Store no plaintext code. If verification material is persisted, use a per-code random salt and a deliberately slow password-grade KDF such as PBKDF2/Argon2id/scrypt with reviewed parameters. Never use unsalted single-round SHA-256 as the credential verifier.
 
-A recovery code is not itself a Firebase password, access token, refresh token, or
-permanent session token. If a recovery code is also used to derive an encryption key,
-use a reviewed password-based KDF such as Argon2id, scrypt, or PBKDF2 with an appropriate
-salt and parameters; do not use a raw hash as a KDF.
+Verification must be single-use, constant-time where applicable, rate-limited by a trusted mechanism when network exposed, and subject to an expiry/rotation policy.
+
+If a recovery code is used to derive an encryption key, keep that KDF purpose separate from credential verification and use explicit context separation.
 
 ## Application-level encryption
 
-Firebase Authentication/Security Rules answer **who may access data**. Application-level
-encryption answers **what Firebase can read**. For highly sensitive financial records,
-we can use both:
+For sensitive application data:
 
 ```text
 Plaintext
-   ↓
-Authenticated encryption
-   ↓
+  ↓
+Authenticated encryption (AES-GCM/approved AEAD)
+  ↓
 Ciphertext
-   ↓
+  ↓
 Firebase
 ```
 
-Use a reviewed AEAD construction such as AES-GCM. Do not invent cryptography or use
-unauthenticated encryption for sensitive records. Tampered ciphertext must fail decryption.
+Use fresh random salt/nonce material and reviewed KDF parameters. Wrong keys and tampering must fail closed.
 
-Encryption keys are never hard-coded, logged, sent to analytics, put in URLs, or stored
-as plaintext in Firebase. The backend, if one is added later, is not assumed to possess
-user encryption keys.
+Encrypted envelopes must be versioned. Before expensive key derivation, validate the envelope version, algorithm and KDF iteration count against an explicit accepted range. Never accept attacker-controlled extreme iteration counts.
 
-Encrypted records and backups must include a format/version identifier so cryptographic
-or schema migrations can be performed safely. Do not expose sensitive plaintext in
-metadata.
+Use AES-GCM additional authenticated data (AAD) to bind security context where appropriate, including application identity and envelope/schema version; bind the authenticated user identity when the keying model permits it. A backup from one application/context must not silently become valid in another merely because the passphrase matches.
+
+Existing encrypted formats must have a migration strategy before changing the envelope or KDF contract.
 
 ## Secure local storage and app lock
 
-Secrets held on a device use platform-appropriate secure storage behind interfaces in
-`packages/security`.
+`SecureStorage` is a security guarantee, not a naming convention. Native secret storage must use an approved platform secure/keystore-backed implementation. Do not silently use AsyncStorage or equivalent plaintext key-value storage for tokens, keys or recovery material.
 
-Android/native should use secure/keystore-backed storage where possible. Browser
-`localStorage` must not be treated as equivalent to Android Keystore and must never hold
-passwords, recovery codes, encryption keys, or long-lived authentication secrets in
-plaintext.
+Web storage is a different threat model. Never store passwords, recovery codes, encryption keys or long-lived authentication secrets in plain `localStorage`. Prefer in-memory handling or a specifically reviewed browser mechanism and document the residual risk.
 
-App lock and biometrics are additional local protections. They do not replace Firebase
-Authentication or Security Rules. Sensitive in-memory/UI state should be cleared when
-sessions end or the application is locked where practical.
+App-lock state must persist across restart using secure storage. Failed-attempt counters must not reset after each lockout. Use an escalating/documented lockout policy. App lock remains an additional local control, not authorization.
 
-## Financial data and privacy
+Sign-out must clear session-local sensitive state, dispose cached per-user repositories/services and remove only platform-owned keys. Never call an unscoped global storage `clear()`.
 
-Treat bank accounts, balances, investments, mutual funds, EPF, property, lending, loans,
-liabilities, net worth, income, expenses, and associated personal data as highly sensitive.
+## Backup and restore security
 
-Never log them, put them into analytics events, expose them through error messages, or
-send them to third-party services unless explicitly required and documented.
+Backups are encrypted on the device before upload. Firebase Storage must receive ciphertext for protected financial data.
 
-The shared logger should redact sensitive fields by shape and default to safe production
-logging.
+Backup IDs are opaque, random/collision-resistant and validated before path interpolation. Do not derive IDs from caller-controlled timestamps alone and never silently overwrite an existing ID.
 
-## Backup and restore
+Backup passphrases require a minimum-strength policy at every encryption entry point. A one-character passphrase is invalid for financial backups.
 
-When application-level encryption is enabled, backups are encrypted on the device before
-upload. Firebase Storage contains ciphertext rather than plaintext financial records.
-Backup metadata contains only non-sensitive operational information such as version,
-count, timestamps, and opaque identifiers.
+Restore is treated as hostile input even after decryption. It must:
 
-Use random/opaque backup identifiers rather than filenames that expose account names,
-stocks, portfolios, or other sensitive information.
+1. validate envelope version/algorithm/KDF bounds
+2. verify authentication/integrity
+3. verify user/app/schema binding
+4. reject unknown collection names
+5. reject `__proto__`, `constructor` and `prototype` keys
+6. validate records against per-collection schemas
+7. use conflict-aware restore or a clearly confirmed replace-all mode
+8. avoid inconsistent partial writes through batching/transactional mechanisms where supported
 
-Every backup operation is authenticated and authorized by Firebase Storage/Firestore
-Security Rules. Restore verifies ownership, format/version, integrity and decryption
-before changing local data.
+A generic shared API must not expose raw plaintext financial export by accident. Encrypted export is the default. If plaintext export is ever intentional, it must be explicitly named and documented as sensitive.
 
-## Account deletion
+## Data synchronization and integrity
 
-Account deletion is destructive. Require explicit confirmation and recent reauthentication
-where appropriate.
+Every syncable record carries stable `id`, `updatedAt`, `revision` and `deletedAt` metadata.
 
-The intended sequence is:
+The client is not authoritative for synchronization time or revision. Use Firebase server timestamps where supported and enforce valid transitions in Rules. Record ID must match the document ID. A client must not set a year-3000 timestamp or huge revision to permanently win conflicts.
+
+Sync is incremental, not full-collection polling. Persist per-collection watermarks and use `updatedAfter`. Bound concurrency and define tombstone retention/cleanup so Spark read/write quotas do not become an availability failure.
+
+When paging, tombstones should be filtered by the query where possible so the limit applies to live records rather than filtering after the limit.
+
+Soft delete should update only the necessary tombstone fields or use a transaction rather than reading and rewriting the entire document.
+
+## Account deletion and erasure
+
+Deletion is a security/privacy workflow, not just a UI action.
+
+Required order:
 
 ```text
-1. Confirm deletion
-2. Re-authenticate if required
-3. Delete encrypted user data
-4. Delete associated backups/storage
-5. Delete secondary account records
-6. Delete Firebase Authentication account
-7. Clear local encrypted data/cache/session/state
-8. Navigate to signed-out state
+1. explicit confirmation
+2. recent reauthentication
+3. create/advance deletion journal when resumability is required
+4. delete user-owned Firestore data
+5. delete all owned Storage backups/objects
+6. delete secondary records
+7. delete Firebase Auth account
+8. clear local encrypted data/cache/session/derived keys
+9. signed-out state
 ```
 
-The exact Firebase API sequence may vary, but implementation must not intentionally orphan
-user data or leave sensitive local material after successful deletion. Partial failures
-must be surfaced and handled safely.
+Reauthentication must occur before destructive work, not at the final Auth deletion step.
 
-## Server-controlled fields and roles
+Firestore does not cascade subcollections. Maintain one authoritative inventory of user-owned collections. Do not keep divergent hardcoded deletion lists in multiple services.
 
-Use Firebase server timestamps where appropriate. Ordinary clients must not be able to
-change `ownerId`, `createdBy`, creation identity, verification status, or other security
-metadata.
+On Spark, client-only deletion cannot guarantee recursive erasure after the user loses access or never returns. If guaranteed erasure is a product/security requirement, use a trusted server capability. Until then, the limitation must be documented and deletion status must not falsely claim complete erasure when it is not known.
 
-If administrative roles are introduced, use Firebase Authentication custom claims or
-another trusted mechanism. Never trust a client-controlled `isAdmin` Firestore field.
+Storage deletion must account for nested prefixes and summary/object consistency.
 
-## Firebase App Check
+## Logging and privacy
 
-Firebase App Check should be enabled where supported and appropriate. It reduces abuse
-from unauthorized app clients but is an additional layer only. App Check never replaces
-Authentication, Security Rules, or application-level encryption.
+Financial data is highly sensitive: balances, investments, EPF, property, lending, liabilities, net worth, income, expenses and associated personal data.
 
-Security Rules must remain safe even if an attacker bypasses App Check.
+Production logging should be allowlist-based: intentionally safe fields may be logged; unknown keys are redacted by default. Do not rely on a denylist of `amount`/`balance` because financial models evolve (`value`, `outstanding`, `netWorth`, `units`, `pricePerUnit`, `currentPrice`, `spent`, `limit`, `description`, `displayName`, `name`, etc.).
 
-## Abuse prevention
+Prefer fixed event codes over arbitrary message strings. Release builds should not ship uncontrolled `console.*` logging. Logger defaults must be production-safe.
 
-Client-side rate limiting is not a security boundary. Keep queries and downloads scoped,
-paginated and bounded. Avoid unbounded writes and Storage operations.
+## Error handling
 
-Security-sensitive workflows must consider brute-force attempts, replay, expiration,
-single-use challenges, and denial-of-service/resource abuse within the limits of the
-current Firebase plan.
+Services throw typed coded errors without user-facing copy. Error and telemetry payloads must not contain passwords, recovery codes, encryption keys, access/refresh tokens, financial records, personal data or ciphertext.
 
-## Account deletion and encrypted data ordering
+## Cost/quota safety on Spark
 
-Deleting the authentication account first can make user-owned encrypted data impossible
-to authenticate and remove through the normal application flow. Therefore the normal
-flow deletes user data first and authentication last, followed by local cleanup.
+Spark quotas are both cost and availability constraints. Avoid full-collection sync, unbounded `Promise.all`, unlimited downloads, client retry loops and oversized backups.
 
-## Errors
+Use pagination, incremental sync, bounded concurrency and tombstone retention. Document any feature whose secure implementation requires Blaze/backend rather than silently weakening it.
 
-Services throw typed, coded errors and never contain user-facing copy. Applications map
-codes to localized messages. Error messages and telemetry must not include passwords,
-recovery codes, keys, tokens, financial records, personal data, or ciphertext.
+## CI and testing
 
-## Data and synchronization
+The repository's security posture is incomplete until infrastructure is tested automatically.
 
-Every synchronizable record carries `updatedAt`, `revision` and `deletedAt`.
-Conflict resolution is last-write-wins with `revision` breaking `updatedAt` ties, and at
-an otherwise exact tie, deletion beats a concurrent edit. A tombstone must never be
-resurrected by a slower device's stale write.
+CI must run:
 
-Deletes are soft for the same reason — a tombstone has to reach every device before the
-record can actually go.
+```text
+pnpm turbo build test lint
+architecture checks
+Firebase Emulator Suite rules/integration tests
+pnpm audit with a documented reviewed allowlist if an advisory cannot yet be fixed
+```
 
-Exports are versioned. A bundle from a newer schema is rejected outright rather than
-partially read.
+Rules tests must include:
 
-## UI
+- unauthenticated access denied
+- user B cannot read/write/update/delete user A data for every private collection
+- user B cannot access user A Storage backups
+- unknown collection/path rejected
+- ownership/security fields cannot be changed
+- invalid document ID rejected
+- invalid timestamp/revision/tombstone transitions rejected
+- device-verification client reads/writes rejected
 
-React Native everywhere, rendered on the web through `react-native-web`, so one component
-tree serves Android and the browser. No DOM elements and no CSS: all styling comes from
-`packages/theme` through `StyleSheet.create`, which keeps a single source of truth for
-colour and spacing across both targets.
+Crypto/security tests must include:
 
-Platform-specific behaviour stays at the leaf — `feature.web.ts` / `feature.native.ts`,
-or `Platform.select` — rather than being scattered through shared logic. Native-only
-capabilities such as biometrics sit behind interfaces in `packages/security` with a web
-fallback.
+- salted/iterated recovery-code verification
+- constant-time verification where applicable
+- unknown encryption version/algorithm rejected
+- KDF iteration bounds rejected outside the accepted range
+- AAD/context tampering rejected
+- weak backup passphrase rejected
+- wrong-key/tampered ciphertext rejected
+- app-lock escalation survives restart
+- sign-out clears session-local state
 
-## Testing and Firebase Emulator
+Deletion tests must prove reauthentication occurs before destructive calls, every declared collection is handled, interruption is resumable where promised, and local state is cleared.
 
-Shared packages are tested, with priority on authentication, account deletion, data
-deletion, backup, restore, encryption, recovery codes, session management,
-synchronization, validation and error handling.
+Restore tests must prove unknown collections, unsafe object keys, invalid record shapes and stale-backup overwrites are rejected or explicitly handled.
 
-Firebase Security Rules are tested with the Firebase Emulator Suite wherever practical.
-Tests cover both allowed and denied operations, including cross-user access attempts,
-ownership changes, unauthorized deletes, backup access, and invalid document writes.
+## Firebase Emulator and version control
 
-Never run automated security tests against production Firebase data.
+Firebase infrastructure must be versioned:
 
-Cryptography tests include correct decryption, wrong-key failure, tampered-ciphertext
-failure, invalid payload rejection, and encryption-format/version handling.
+```text
+firebase.json
+firestore.rules
+firestore.indexes.json
+storage.rules
+rules/integration test configuration
+```
 
-Tests target pure logic. Importing `react-native` pulls in Flow-typed source a plain test
-runner cannot parse, so logic worth testing is kept out of modules that import it.
+Rules must not exist only in the Firebase console. Console changes must be reproduced in Git before release.
 
-## What is checked automatically
+## Release gates
 
-Documentation drifts; lint does not. `eslint.config.mjs` encodes the dependency table,
-the DOM-element ban and the deep-import ban; `scripts/check-architecture.mjs` covers
-what ESLint cannot express — the CSS ban, the type-only Firebase boundary,
-`packages/` not importing `apps/`, and every shared package having a public API and a
-README.
+Before connecting the first real Firebase project or creating real user data:
 
-Security Rules should also be checked in CI using the Firebase Emulator Suite when the
-repository has emulator-based rule tests configured.
+1. Firestore rules exist and negative tests pass.
+2. Storage rules exist if Storage is used and negative tests pass.
+3. Emulator configuration is committed.
+4. App Check strategy is documented and configured for the supported clients.
+5. Email verification and reauthentication policy is implemented.
+6. Secure native storage is real, not an in-memory/pass-through placeholder.
+7. Recovery-code storage/verification is salted, iterated and single-use.
+8. Encryption envelope validation and AAD policy is implemented.
+9. Backup passphrase and backup-ID policies are enforced.
+10. Restore allowlists and schema validation are implemented.
+11. Account deletion has an explicit Spark limitation or trusted server strategy.
+12. CI executes the security tests.
+13. No security finding is marked accepted without a written rationale.
 
-`pnpm turbo build test lint` runs the existing build, test and lint architecture checks.
+## Migration discipline
+
+Before first real user data, security changes are code/config changes. After real data exists, changes to recovery-code hashing, encryption envelope/KDF, sync metadata or Security Rules may require migrations.
+
+Therefore version encryption formats, keep migration readers when needed, document backfills for server timestamps/revisions, create required Firestore indexes before queries ship, and plan secure-storage migration before changing token storage.
+
+## What is intentionally not promised on Spark
+
+The platform does **not** pretend Spark provides arbitrary server-side rate limiting, custom secret issuance, guaranteed recursive erasure after account loss, or trusted client-resistant device verification. Those are explicit architecture decisions. If the product requires them, the correct next step is a trusted backend/Blaze decision — not a weaker implementation.
+
+## Feature workflow
+
+For every feature:
+
+1. Decide reusable vs app-specific.
+2. Search existing shared packages/interfaces.
+3. Threat-model Firebase access and data flow.
+4. Implement behind a service interface.
+5. Add/modify Rules for every Firebase resource.
+6. Add negative Emulator tests before calling the feature secure.
+7. Add unit/integration tests.
+8. Update the relevant package README and this document when architecture changes.
+9. Run build/test/lint/architecture/security checks.
+10. Audit logs, secrets, ownership, deletion, restore and failure paths.
+11. Only then wire the feature into an application.
+
+The reusable platform is successful when a new financial app can compose the same authentication, account, backup, encryption, theme, session and security controls without copying implementation or weakening the security model.
