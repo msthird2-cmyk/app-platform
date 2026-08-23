@@ -4,7 +4,16 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, getDocs } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  deleteDoc,
+  serverTimestamp,
+  collection,
+  collectionGroup,
+  getDocs,
+} from 'firebase/firestore';
 import { ALICE, BOB, createTestEnvironment, record, unverified, verified } from './helpers';
 
 let env: RulesTestEnvironment;
@@ -86,6 +95,35 @@ describe('cross-user access', () => {
     const db = verified(env, BOB).firestore();
     await assertFails(getDoc(doc(db, `users/${ALICE}`)));
     await assertFails(setDoc(doc(db, `users/${ALICE}`), { displayName: 'owned' }));
+  });
+
+  it('denies Bob writing to Alice devices', async () => {
+    const db = verified(env, BOB).firestore();
+    await assertFails(setDoc(doc(db, `users/${ALICE}/devices/d1`), { name: 'Planted' }));
+    await assertFails(deleteDoc(doc(db, `users/${ALICE}/devices/d1`)));
+  });
+
+  it('denies Bob writing to Alice settings', async () => {
+    const db = verified(env, BOB).firestore();
+    await assertFails(setDoc(doc(db, `users/${ALICE}/settings/s1`), { theme: 'dark' }));
+    await assertFails(deleteDoc(doc(db, `users/${ALICE}/settings/s1`)));
+  });
+
+  it('denies Bob writing to the Alice deletion journal', async () => {
+    const db = verified(env, BOB).firestore();
+    // Forging a journal entry would misrepresent the state of someone else's
+    // account deletion; clearing one would hide an unfinished deletion.
+    await assertFails(setDoc(doc(db, `users/${ALICE}/deletion/status`), { startedAt: 1 }));
+    await assertFails(deleteDoc(doc(db, `users/${ALICE}/deletion/status`)));
+  });
+
+  it('denies Bob creating a backup summary under Alice', async () => {
+    const db = verified(env, BOB).firestore();
+    await assertFails(
+      setDoc(doc(db, `users/${ALICE}/backups/planted`), {
+        id: 'planted', createdAt: 1, sizeBytes: 1, recordCount: 1, appName: 'Net Worth',
+      }),
+    );
   });
 
   it('denies Bob touching Alice backups, devices, settings or deletion journal', async () => {
@@ -222,6 +260,18 @@ describe('backup metadata', () => {
     );
   });
 
+  it('refuses to update a backup summary the owner owns', async () => {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), `users/${ALICE}/backups/abc123`), summary);
+    });
+    const db = verified(env, ALICE).firestore();
+    // A summary is immutable once written: its counts describe an object in
+    // Storage that itself cannot be replaced.
+    await assertFails(
+      setDoc(doc(db, `users/${ALICE}/backups/abc123`), { ...summary, recordCount: 99 }),
+    );
+  });
+
   it('refuses to overwrite an existing backup summary', async () => {
     await env.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), `users/${ALICE}/backups/abc123`), summary);
@@ -230,6 +280,51 @@ describe('backup metadata', () => {
     await assertFails(
       setDoc(doc(db, `users/${ALICE}/backups/abc123`), { ...summary, recordCount: 999 }),
     );
+  });
+});
+
+describe('collection group queries', () => {
+  // The usual way a path-scoped ruleset leaks: a collection group query is not
+  // evaluated against `/users/{uid}/...`, so it must be denied outright.
+  beforeEach(async () => {
+    await seedRecord(ALICE, 'assets', 'a1');
+    await seedRecord(BOB, 'assets', 'b1');
+  });
+
+  it('denies a collection group query over records', async () => {
+    await assertFails(getDocs(collectionGroup(verified(env, ALICE).firestore(), 'assets')));
+    await assertFails(getDocs(collectionGroup(verified(env, BOB).firestore(), 'assets')));
+  });
+
+  it('denies a collection group query over backups and secondary collections', async () => {
+    const db = verified(env, ALICE).firestore();
+    await assertFails(getDocs(collectionGroup(db, 'backups')));
+    await assertFails(getDocs(collectionGroup(db, 'devices')));
+    await assertFails(getDocs(collectionGroup(db, 'deletion')));
+  });
+
+  it('denies a collection group query to an unauthenticated caller', async () => {
+    await assertFails(getDocs(collectionGroup(env.unauthenticatedContext().firestore(), 'assets')));
+  });
+});
+
+describe('token claims', () => {
+  it('denies a record write when the token carries no email_verified claim', async () => {
+    // A custom or provider token may omit the claim entirely. That must be a
+    // denial decision, not an evaluation error.
+    const db = env.authenticatedContext('claimless-uid', {}).firestore();
+    await assertFails(
+      setDoc(doc(db, 'users/claimless-uid/assets/a1'), {
+        ...record('a1'), updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('still allows a claimless owner to read and delete their own records', async () => {
+    await seedRecord('claimless-uid', 'assets', 'a1');
+    const db = env.authenticatedContext('claimless-uid', {}).firestore();
+    await assertSucceeds(getDoc(doc(db, 'users/claimless-uid/assets/a1')));
+    await assertSucceeds(deleteDoc(doc(db, 'users/claimless-uid/assets/a1')));
   });
 });
 

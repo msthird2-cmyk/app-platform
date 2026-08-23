@@ -16,8 +16,22 @@ service firebase.storage {
       return fileName.matches('^[A-Za-z0-9_-]{1,64}[.]json$');
     }
 
+    // Listing is evaluated against the *prefix* `users/{uid}/backups`, which has
+    // no final segment for a `{fileName}` wildcard to bind to — so only a
+    // recursive wildcard matches it. Account deletion enumerates this prefix
+    // before removing each object, so denying the owner here would strand every
+    // backup in Storage with nothing able to reach it.
+    //
+    // Reads therefore widen to the owner's own prefix at any depth. Storage
+    // rules have no get/list split, so this cannot be narrowed further; it is
+    // safe because `create` below still demands a single safe filename, so no
+    // nested object can ever exist to be read, and because the grant is
+    // confined to one account's own subtree.
+    match /users/{uid}/backups/{allPaths=**} {
+      allow read: if isOwner(uid);
+    }
+
     match /users/{uid}/backups/{fileName} {
-      allow read: if isOwner(uid) && isBackupFile(fileName);
       // `resource == null` is the load-bearing clause: a replace must not be
       // able to reach this rule by being classified as a create. A new backup
       // gets a new name, so an existing one can never be silently overwritten.

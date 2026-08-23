@@ -21,7 +21,12 @@ service cloud.firestore {
     // Financial writes additionally require a verified address, so an account
     // registered against someone else's email cannot record data.
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      // `.get` with a default: a token that omits the claim entirely — a custom
+      // token, or some provider flows — must produce a denial decision rather
+      // than an evaluation error. Same outcome, deterministic instead of
+      // exceptional, and it cannot turn into a surprise inside a larger
+      // boolean expression later.
+      return isSignedIn() && request.auth.token.get('email_verified', false) == true;
     }
 
     // ---- record collections ---------------------------------------------
