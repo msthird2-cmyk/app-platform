@@ -40,7 +40,7 @@ const payload = await crypto.encrypt(JSON.stringify(records), passphrase, {
   appName,                                       // so the bundle cannot be replayed
 });
 
-const codes = generateRecoveryCodes(8);          // shown to the user once
+const codes = generateRecoveryCodes(getRandomBytes, 8);  // shown to the user once
 const records = await hashRecoveryCodes(codes, crypto, { now: Date.now() });
 ```
 
@@ -56,7 +56,8 @@ const records = await hashRecoveryCodes(codes, crypto, { now: Date.now() });
 | `SecretHash`, `hashSecret`, `verifySecret` | Salted, iterated hashing for values that must resist offline attack |
 | `assessPassphrase`, `assertStrongPassphrase`, `PassphrasePolicy` | Passphrase strength, enforced before encryption |
 | `SecureStorage` (with `isHardwareBacked`), `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Storage and biometric interfaces plus fallbacks |
-| `generateRecoveryCodes`, `hashRecoveryCodes`, `verifyRecoveryCode`, `remainingRecoveryCodes` | Single-use, expiring recovery codes stored as salted hashes |
+| `generateRecoveryCodes`, `hashRecoveryCodes`, `verifyRecoveryCode`, `remainingRecoveryCodes` | Single-use, expiring recovery codes stored as salted hashes. Generation takes the platform's entropy source, like `PortableCryptoService` |
+| `RandomBytes`, `drawRandomBytes` | The one entropy contract. Injected from the composition root and validated on every draw |
 | `AppLockState`, `registerFailedAttempt`, `isLockedOut`, `shouldAutoLock`, `assertUnlockable` | PIN lock with lockout and idle auto-lock |
 | `SessionTokens`, `needsRefresh`, `msUntilRefresh`, `assertActive`, `createSessionStore` | Session lifetime and persistence |
 | `getOrCreateDeviceId`, `assertRegistered`, `DeviceRegistry` | Per-install device identity |
@@ -72,7 +73,11 @@ Iteration count (defaults to 210,000, and must fall between `MIN_KDF_ITERATIONS`
 
 Both write the same envelope. `tests/crossImplementation.test.ts` proves each reads what the other wrote, byte for byte, including a payload recorded from the implementation that predates the portable one — so a backup taken on the web restores on a phone and the reverse.
 
-`scripts/check-architecture.mjs` walks the imports out from `PortableCryptoService` and fails the build if anything on that path uses `crypto.subtle`, `crypto.getRandomValues`, `btoa`, `atob`, `TextEncoder` or `TextDecoder`. React Native 0.76 provides none of them, and reaching for one would fail on a user's device rather than in CI.
+## Entropy
+
+Everything that needs randomness takes a `RandomBytes` from the composition root: `PortableCryptoService` for its salts and nonces, and `generateRecoveryCode` for its symbols. There is one contract, not two, and no default — a generator that silently falls back to a weaker source is worse than one that refuses to run. `drawRandomBytes` validates every draw, because the realistic wiring mistake is not a weak generator but an absent one, and a stub returning zeroes destroys every salt, nonce and recovery code without failing anywhere visible.
+
+`scripts/check-architecture.mjs` walks the imports out from `PortableCryptoService` **and from `recoveryCodes`** and fails the build if anything on either path uses `crypto.subtle`, `crypto.getRandomValues`, `btoa`, `atob`, `TextEncoder` or `TextDecoder`. React Native 0.76 provides none of them, and reaching for one would fail on a user's device rather than in CI.
 
 ## Dependencies
 
@@ -81,8 +86,6 @@ Both write the same envelope. `tests/crossImplementation.test.ts` proves each re
 ## Limitations
 
 `WebCryptoService` needs a WebCrypto implementation; on React Native use `createCryptoService`, which falls through to `PortableCryptoService`. Neither holds a key in hardware — a keystore-backed implementation behind the same interface is still the stronger option where one exists.
-
-**`generateRecoveryCode` is not yet React Native compatible.** It calls `crypto.getRandomValues` directly rather than taking an injected source, so it throws on Hermes. Verification and hashing are unaffected. This is outside the crypto-service boundary and is not fixed here; it belongs with whichever change next touches recovery codes.
 
 PBKDF2 in JavaScript is roughly an order of magnitude slower than the native implementation — about 130 ms for 100,000 rounds on a development machine, and slower on a phone. The iteration count was deliberately not lowered to compensate. `InMemorySecureStorage` and `UnavailableBiometrics` are fallbacks for tests and the web, not production storage — `isHardwareBacked` is `false`, and `createSessionStore` refuses to persist tokens to any store that reports `false`. **No hardware-backed implementation ships in this repository**: an application must inject one before sessions can be persisted at all.
 

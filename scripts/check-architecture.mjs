@@ -87,10 +87,17 @@ for (const file of sources.filter((f) => relative(ROOT, f).startsWith('packages/
 // one would not fail here or in CI; it would fail on a user's phone, at the
 // moment they try to restore a backup.
 //
-// The set of files checked is computed by following imports out from
-// `PortableCryptoService`, not hard-coded, so pulling in a module that uses a
-// global is caught even though that module was never listed.
-const PORTABLE_ENTRY = join(ROOT, 'packages/security/src/services/PortableCryptoService.ts');
+// The set of files checked is computed by following imports out from each
+// entry point, not hard-coded, so pulling in a module that uses a global is
+// caught even though that module was never listed.
+//
+// Recovery-code generation is an entry point in its own right because it is
+// not reachable from the crypto service and was for a while the one part of
+// this package that still read `crypto.getRandomValues` from the global.
+const PORTABLE_ENTRIES = [
+  'packages/security/src/services/PortableCryptoService.ts',
+  'packages/security/src/recoveryCodes.ts',
+].map((path) => join(ROOT, path));
 const BROWSER_GLOBALS = [
   { pattern: /\bcrypto\s*\.\s*subtle\b/, name: 'crypto.subtle' },
   { pattern: /\bcrypto\s*\.\s*getRandomValues\b/, name: 'crypto.getRandomValues' },
@@ -125,18 +132,22 @@ function portableSurface(entry, seen = new Set()) {
   return seen;
 }
 
-if (!existsSync(PORTABLE_ENTRY)) {
-  failures.push('packages/security/src/services/PortableCryptoService.ts is missing — the React Native crypto guard cannot run.');
-} else {
-  for (const file of portableSurface(PORTABLE_ENTRY)) {
-    const code = stripComments(readFileSync(file, 'utf8'));
-    for (const { pattern, name } of BROWSER_GLOBALS) {
-      if (pattern.test(code)) {
-        failures.push(
-          `${relative(ROOT, file)} uses ${name}, which React Native does not provide. ` +
-            'It is on the PortableCryptoService import path — inject the capability instead.',
-        );
-      }
+const portableFiles = new Set();
+for (const entry of PORTABLE_ENTRIES) {
+  if (!existsSync(entry)) {
+    failures.push(`${relative(ROOT, entry)} is missing — the React Native crypto guard cannot run.`);
+    continue;
+  }
+  portableSurface(entry, portableFiles);
+}
+for (const file of portableFiles) {
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const { pattern, name } of BROWSER_GLOBALS) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${relative(ROOT, file)} uses ${name}, which React Native does not provide. ` +
+          'It is on the React Native crypto path — inject the capability instead.',
+      );
     }
   }
 }

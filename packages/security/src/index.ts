@@ -14,8 +14,8 @@ export {
 export {
   PortableCryptoService,
   type PortableCryptoOptions,
-  type RandomBytes,
 } from './services/PortableCryptoService';
+export { drawRandomBytes, type RandomBytes } from './crypto/entropy';
 export {
   MIN_KDF_ITERATIONS,
   MAX_KDF_ITERATIONS,

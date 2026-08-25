@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 
 import { SecurityError, SecurityErrorCode } from '../errors';
 import { fromBase64, toBase64 } from '../crypto/base64';
+import { drawRandomBytes, type RandomBytes } from '../crypto/entropy';
 import {
   IV_BYTES,
   KEY_LENGTH_BITS,
@@ -26,8 +27,7 @@ import type {
 
 const KEY_LENGTH_BYTES = KEY_LENGTH_BITS / 8;
 
-/** Entropy, supplied by the platform rather than assumed to exist. */
-export type RandomBytes = (length: number) => Uint8Array;
+export type { RandomBytes };
 
 export interface PortableCryptoOptions {
   /**
@@ -83,22 +83,10 @@ export class PortableCryptoService implements CryptoService {
     this.random = options.randomBytes;
   }
 
-  /**
-   * The injected generator is checked on every call. A source that returns the
-   * wrong length, the wrong type, or all zeroes is a stub someone wired in by
-   * mistake, and it would silently destroy the security of every salt and
-   * nonce. An all-zero result from a real generator has probability 2^-96 at
-   * the shortest length used here.
-   */
+  /** Checked on every call — see `drawRandomBytes`, which recovery-code
+   *  generation uses for the same reason. */
   private randomBytes(length: number): Uint8Array {
-    const bytes = this.random(length);
-    if (!(bytes instanceof Uint8Array) || bytes.length !== length) {
-      throw new SecurityError(SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID);
-    }
-    let anySet = 0;
-    for (const byte of bytes) anySet |= byte;
-    if (anySet === 0) throw new SecurityError(SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID);
-    return bytes;
+    return drawRandomBytes(this.random, length);
   }
 
   private deriveKey(passphrase: string, salt: Uint8Array, iterations: number): Uint8Array {

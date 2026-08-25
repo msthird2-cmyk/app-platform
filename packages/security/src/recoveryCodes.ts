@@ -1,4 +1,5 @@
 import { SecurityError, SecurityErrorCode } from './errors';
+import { drawRandomBytes, type RandomBytes } from './crypto/entropy';
 import type { CryptoService, SecretHash } from './types/crypto';
 
 /** 32 symbols, ambiguous characters removed. 256 is a multiple of 32, so
@@ -24,25 +25,37 @@ export interface RecoveryCodeRecord {
   usedAt: number | null;
 }
 
-function randomChar(): string {
-  const bytes = new Uint8Array(1);
-  globalThis.crypto.getRandomValues(bytes);
-  return ALPHABET[(bytes[0] ?? 0) % ALPHABET.length] ?? ALPHABET[0]!;
-}
+const SYMBOLS = GROUP * GROUPS;
 
-/** One code, e.g. `K7QM-2XPD-9RTF`. Shown once, never persisted in plaintext. */
-export function generateRecoveryCode(): string {
+/**
+ * One code, e.g. `K7QM-2XPD-9RTF`. Shown once, never persisted in plaintext.
+ *
+ * Entropy is injected rather than read from a global. This used to call
+ * `globalThis.crypto.getRandomValues` directly, which React Native does not
+ * provide — the same reason `PortableCryptoService` takes a `RandomBytes`, and
+ * it takes the same one. There is no separate abstraction here and no default:
+ * a generator that silently falls back to a weaker source is worse than one
+ * that refuses to run.
+ *
+ * The bias argument is unchanged. 256 is a multiple of the 32-symbol alphabet,
+ * so a random byte modulo its length is uniform; the bytes are now drawn in one
+ * call rather than twelve, which changes nothing about the distribution.
+ */
+export function generateRecoveryCode(randomBytes: RandomBytes): string {
+  const bytes = drawRandomBytes(randomBytes, SYMBOLS);
+  const symbols: string[] = [];
+  for (let i = 0; i < SYMBOLS; i += 1) {
+    symbols.push(ALPHABET[(bytes[i] as number) % ALPHABET.length] as string);
+  }
   const groups: string[] = [];
   for (let g = 0; g < GROUPS; g += 1) {
-    let group = '';
-    for (let c = 0; c < GROUP; c += 1) group += randomChar();
-    groups.push(group);
+    groups.push(symbols.slice(g * GROUP, (g + 1) * GROUP).join(''));
   }
   return groups.join('-');
 }
 
-export function generateRecoveryCodes(count = 8): string[] {
-  return Array.from({ length: count }, () => generateRecoveryCode());
+export function generateRecoveryCodes(randomBytes: RandomBytes, count = 8): string[] {
+  return Array.from({ length: count }, () => generateRecoveryCode(randomBytes));
 }
 
 /** Accepts user input in any spacing or case; rejects unknown characters. */
