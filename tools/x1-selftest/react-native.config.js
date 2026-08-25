@@ -1,28 +1,29 @@
 /**
- * Excludes `expo` from React Native's generated `PackageList.java`.
+ * Corrects the import path React Native's autolinking generates for `expo`.
  *
- * Two things are true at once, and together they break the Android release
- * build:
+ * `expo/android/build.gradle` declares `namespace "expo.core"`, a legacy value.
+ * Autolinking infers `packageImportPath` from that namespace rather than from
+ * expo's own `react-native.config.js`, so the generated `PackageList.java`
+ * contains `import expo.core.ExpoModulesPackage;` — and expo 52 ships no
+ * `expo.core` package at all, only `expo.modules.ExpoModulesPackage`. The
+ * result is `:app:compileReleaseJavaWithJavac` failing with
+ * "cannot find symbol: class ExpoModulesPackage".
  *
- * 1. Expo already registers its own modules. The generated `MainApplication.kt`
- *    wraps the host in `expo.modules.ReactNativeHostWrapper`, so adding
- *    `ExpoModulesPackage` to `PackageList` is redundant.
- * 2. The entry autolinking generates is wrong. It infers the import from
- *    `expo/android/build.gradle`, which declares `namespace "expo.core"` — a
- *    legacy value. The class actually shipped in expo 52 is
- *    `expo.modules.ExpoModulesPackage`, and there is no `expo.core` package at
- *    all, so `:app:compileReleaseJavaWithJavac` fails with
- *    "cannot find symbol: class ExpoModulesPackage".
- *
- * Setting the android platform to null for `expo` leaves it out of
- * `PackageList` while changing nothing about how the modules are loaded — the
- * wrapper still does that.
+ * Only that one field is overridden. An earlier attempt set the whole android
+ * platform to `null`, which did remove the bad import — and also removed the
+ * `:expo` Gradle project from the app's compile classpath, so
+ * `MainApplication.kt` and `MainActivity.kt` could no longer resolve
+ * `expo.modules.ReactNativeHostWrapper`, `ReactActivityDelegateWrapper` or
+ * `ApplicationLifecycleDispatcher`. The entry has to stay; only its import path
+ * is wrong.
  */
 module.exports = {
   dependencies: {
     expo: {
       platforms: {
-        android: null,
+        android: {
+          packageImportPath: 'import expo.modules.ExpoModulesPackage;',
+        },
       },
     },
   },
