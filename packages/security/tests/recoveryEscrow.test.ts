@@ -10,8 +10,10 @@ import {
   RECOVERY_ESCROW_PURPOSE,
   RECOVERY_ESCROW_VERSION,
   createRecoveryEscrow,
+  fromRecoveryEscrowDocument,
   openRecoveryEscrow,
   recoverDataKey,
+  toRecoveryEscrowDocument,
   type RecoveryEscrowEnvelope,
 } from '../src/recoveryEscrow';
 import { WebCryptoService } from '../src/services/WebCryptoService';
@@ -399,5 +401,104 @@ describe('zero-trusted-device recovery', () => {
     const restored = (await custody.load()) as Uint8Array;
     expect(Array.from(restored)).toEqual(Array.from(TEST_DEK));
     expect(Array.from(fromBase64(toBase64(restored)))).toEqual(Array.from(held));
+  });
+});
+
+/**
+ * The stored-document converters.
+ *
+ * These carry the escrow across the Firestore boundary, and the Android gate
+ * deliberately no longer pays for a second key derivation to check them — each
+ * on-device derivation costs about twelve seconds, and the shape mapping is not
+ * something a JavaScript engine can get wrong differently. So the proof that a
+ * rebuilt document still opens lives here instead, where it is cheap.
+ */
+describe('recovery escrow — stored document', () => {
+  it('round-trips through the document form and still opens', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const document = toRecoveryEscrowDocument('current', escrow);
+    const rebuilt = fromRecoveryEscrowDocument(document);
+    const opened = await openRecoveryEscrow(rebuilt, CODE, crypto, CONTEXT);
+    expect(Array.from(opened)).toEqual(Array.from(TEST_DEK));
+  });
+
+  it('writes exactly the agreed fields and no others', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const document = toRecoveryEscrowDocument('current', escrow);
+    // The same allowlist firestore.rules enforces, minus the timestamps the
+    // persistence layer adds. A field appearing here that the rule does not
+    // permit would be written and then refused.
+    expect(Object.keys(document).sort()).toEqual([
+      'algorithm', 'id', 'iterations', 'iv', 'kdf', 'salt', 'version', 'wrappedKey',
+    ]);
+    expect(document.id).toBe('current');
+    expect(document.version).toBe(RECOVERY_ESCROW_VERSION);
+    expect(document.algorithm).toBe('AES-GCM');
+    expect(document.kdf).toBe('PBKDF2-SHA256');
+    expect(document.iterations).toBe(MIN_KDF_ITERATIONS);
+  });
+
+  it('carries no key or code material', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const serialised = JSON.stringify(toRecoveryEscrowDocument('current', escrow));
+    expect(serialised).not.toContain(toBase64(TEST_DEK));
+    expect(serialised).not.toContain(CODE);
+    expect(serialised).not.toContain('K7QM2XPD9RTF');
+  });
+
+  it('tolerates the timestamps the persistence layer adds', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const stored = {
+      ...toRecoveryEscrowDocument('current', escrow),
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const opened = await openRecoveryEscrow(
+      fromRecoveryEscrowDocument(stored), CODE, crypto, CONTEXT,
+    );
+    expect(Array.from(opened)).toEqual(Array.from(TEST_DEK));
+  });
+
+  it('refuses a document that is missing or mistyped a field', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const good = toRecoveryEscrowDocument('current', escrow);
+    for (const field of ['salt', 'iv', 'wrappedKey', 'algorithm', 'iterations', 'version']) {
+      const missing: Record<string, unknown> = { ...good };
+      delete missing[field];
+      expect(() => fromRecoveryEscrowDocument(missing), `missing ${field}`).toThrowError(
+        expect.objectContaining({ code: SecurityErrorCode.RECOVERY_ESCROW_INVALID }),
+      );
+      expect(() => fromRecoveryEscrowDocument({ ...good, [field]: null }), `null ${field}`)
+        .toThrowError(
+          expect.objectContaining({ code: SecurityErrorCode.RECOVERY_ESCROW_INVALID }),
+        );
+    }
+    for (const value of [null, undefined, 'a string', 42, []]) {
+      expect(() => fromRecoveryEscrowDocument(value), String(value)).toThrow();
+    }
+  });
+
+  it('refuses a document whose cost the read path would reject', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const good = toRecoveryEscrowDocument('current', escrow);
+    for (const iterations of [0, 99_999, 1_000_001]) {
+      expect(
+        () => fromRecoveryEscrowDocument({ ...good, iterations }),
+        String(iterations),
+      ).toThrowError(
+        expect.objectContaining({ code: SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID }),
+      );
+    }
+  });
+
+  it('refuses a document with an unsupported version or algorithm', async () => {
+    const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
+    const good = toRecoveryEscrowDocument('current', escrow);
+    expect(() => fromRecoveryEscrowDocument({ ...good, version: 2 })).toThrowError(
+      expect.objectContaining({ code: SecurityErrorCode.ENCRYPTION_VERSION_UNSUPPORTED }),
+    );
+    expect(() => fromRecoveryEscrowDocument({ ...good, algorithm: 'AES-CBC' })).toThrowError(
+      expect.objectContaining({ code: SecurityErrorCode.ENCRYPTION_ALGORITHM_UNSUPPORTED }),
+    );
   });
 });
