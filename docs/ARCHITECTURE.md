@@ -124,6 +124,12 @@ Rules must independently verify:
 - revisions follow the allowed state transition
 - tombstones cannot be resurrected by stale client writes
 - device-verification/recovery-verification documents cannot be read or modified by clients
+- recovery *escrow* documents are readable and writable by their owner, and by
+  nobody else. They are ciphertext rather than a credential: a wrong recovery
+  code fails an authentication tag, not an authorization check, so the owner
+  holding their own wrapped key learns nothing they could not already compute.
+  The shape is a fixed allowlist, so no field that could verify a guessed code
+  can be added to it.
 - backup metadata cannot contain financial record payloads
 
 ### Storage ownership model
@@ -249,6 +255,37 @@ someone must adjudicate. The check *is* the decryption. No server is involved an
 it works on Spark today. The approved architecture uses the escrow form; if
 server infrastructure arrives later the authentication form can be added
 alongside it, and neither makes the other unnecessary.
+
+**What Gate 3 actually built.** The escrow form above, and nothing else. A DEK
+that already exists is wrapped under a key derived from the recovery code with
+the repository's own KDF policy — PBKDF2-SHA256 at the shipped iteration count,
+unchanged — and sealed with AES-256-GCM. The wrapped copy and the parameters
+needed to open it live at `users/{uid}/recoveryEscrow/{escrowId}`; the code and
+the key itself never leave the device.
+
+Recovery reads that document, derives the wrapping key from the code the user
+types, opens the envelope, checks the result really is a 256-bit key, and hands
+it to Gate 2 custody. Every failure along that path ends with custody untouched.
+The one that matters most is a missing escrow: it raises an error rather than
+falling through to key creation, because a recovery flow that quietly produced a
+new key would orphan every existing record while looking like it worked.
+
+The KDF purpose is separated explicitly, as this document already required of
+any encryption key derived from a recovery code. `EncryptionContext` gained an
+optional `purpose`, bound into the authenticated data as `pur`, which the escrow
+path sets to `recovery-escrow.v1`. Omitting it serialises to exactly the string
+it did before the field existed, so every payload written earlier still opens; a
+purpose-bound envelope and an ordinary one are different domains and neither can
+be opened as the other.
+
+Two things are deliberately absent from the stored document. There is no
+verifier — no digest of the key, no checksum, no hint — because any of them
+would let whoever holds the document test candidate codes without paying for a
+derivation, and the derivation cost is what defends a 60-bit secret offline. And
+there is no recovery-code hash, which is the *other* mechanism: that lives at
+`users/{uid}/recoveryCodes`, is still closed to clients, and still waits for a
+trusted server. Escrow needs no server, so it ships now; the authentication form
+can be added beside it later, exactly as stated above.
 
 **Why the passphrase is optional and is not the DEK.** It exists because some
 users want a recovery path they can hold in their head rather than on paper. It

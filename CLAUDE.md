@@ -315,6 +315,43 @@ weakening this architecture: no plaintext secrets in Firestore, and no
 client-side check presented as server-side verification. A control that cannot
 be implemented securely on Spark is documented as absent.
 
+### Recovery escrow (Gate 3, implemented)
+
+Zero-trusted-device recovery is implemented as **key escrow**, not as an
+authentication factor. `packages/security/src/recoveryEscrow.ts` is the whole of
+it, and it never creates a key.
+
+```text
+recovery code ──PBKDF2-SHA256(salt, 210,000)──▶ wrapping key ──AES-256-GCM──▶ DEK
+```
+
+- The DEK stays random. It is wrapped, never derived.
+- The recovery code never reaches Firestore, and neither does the DEK. What is
+  stored is the wrapped key plus the metadata needed to open it.
+- **Nothing is compared.** A wrong code derives a wrong wrapping key and fails
+  the GCM tag. The check *is* the decryption, so no server needs to know the
+  code and the client never makes an authorization decision.
+- The KDF purpose is separated: `EncryptionContext.purpose` is set to
+  `recovery-escrow.v1` and is bound into the authenticated data, so an escrow
+  envelope cannot be opened as an ordinary payload or the reverse. A context
+  without a purpose produces byte-identical additional data to before the field
+  existed, so payloads written earlier still decrypt.
+- On success the key is placed in **Gate 2 custody** and nowhere else. On any
+  failure — wrong code, corrupt envelope, missing escrow — custody is left
+  exactly as it was, and no replacement key is ever generated.
+
+Stored at `users/{uid}/recoveryEscrow/{escrowId}`, owner-read and owner-write
+under a fixed-shape allowlist. Deliberately **not** `users/{uid}/recoveryCodes`,
+which stays closed to clients: that path holds recovery-code *hashes*, which are
+an authentication credential requiring a comparison the client must not be able
+to fake. The two mechanisms coexist by design — see `docs/ARCHITECTURE.md`.
+
+The escrow document must never carry a digest, checksum or verifier of the key
+or the code. Any such field would let whoever holds the document test candidate
+codes without paying for a key derivation, which is the only thing making a
+60-bit secret expensive to attack offline. The allowlist in `firestore.rules`
+refuses the whole category rather than particular names.
+
 ### Invariants
 
 These hold at every stage of implementation, including partial ones.
@@ -327,7 +364,11 @@ These hold at every stage of implementation, including partial ones.
 - No silent plaintext fallback when the encryption key is unavailable.
 - A missing key fails closed.
 - Losing all trusted devices is recoverable through the recovery code and/or the
-  optional encryption passphrase.
+  optional encryption passphrase. The recovery-code half of this is implemented
+  (Gate 3); the passphrase wrapper is not.
+- A recovery attempt never generates a key. Missing or unopenable escrow fails
+  closed, because minting a replacement would orphan every record encrypted
+  under the original while appearing to succeed.
 - Losing all trusted devices *and* all recovery credentials results in
   unrecoverable encrypted data. This is intended, not a defect.
 

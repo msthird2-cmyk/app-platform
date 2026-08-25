@@ -152,6 +152,79 @@ for (const file of portableFiles) {
   }
 }
 
+// ---- Gate 3 scope and secret-handling guard ----------------------------
+//
+// Two things this cannot let through. First, X-2 record encryption arriving by
+// accident: Gate 3 escrows a key that already exists and does not touch domain
+// records, so the symbols that would implement record encryption must not
+// appear at all. Second, a secret reaching plaintext storage or a log.
+//
+// Comments are stripped before scanning, because the correct places to name
+// `AsyncStorage` and `localStorage` are the comments explaining why they are
+// not used — and those must stay readable rather than being contorted to dodge
+// a grep.
+const X2_SYMBOLS = [
+  'encryptRecord',
+  'decryptRecord',
+  'DataKeyService',
+  'recordEnvelope',
+  'EncryptedRecordEnvelope',
+];
+
+// Plaintext key-value stores. Deliberately not a bare `localStorage` match:
+// IndexedDB is permitted and is reached through `indexedDB`, and the browser
+// custody tier stores ciphertext there under a non-extractable key.
+const PLAINTEXT_STORES = [
+  { pattern: /\bAsyncStorage\b/, name: 'AsyncStorage' },
+  { pattern: /\b(?:window\.|globalThis\.)?localStorage\s*[.[]/, name: 'localStorage' },
+  { pattern: /\b(?:window\.|globalThis\.)?sessionStorage\s*[.[]/, name: 'sessionStorage' },
+];
+
+// A log line that names key material. `console.log(recoveryCode)` is the whole
+// of the attack: the secret leaves the process and lands somewhere durable.
+const SECRET_LOG = /console\.(?:log|info|warn|error|debug)\s*\([^)]*\b(?:recoveryCode|recovery_code|dataKey|dek|wrappingKey|passphrase|plaintextKey)\b/i;
+
+const SECRET_BEARING = sources.filter((f) => {
+  const path = relative(ROOT, f);
+  return (
+    (path.startsWith('packages/security/') ||
+      path.startsWith('packages/firebase/') ||
+      path.startsWith('packages/data/') ||
+      path.startsWith('apps/') ||
+      path.startsWith('tools/')) &&
+    !path.includes('/tests/') &&
+    !path.endsWith('.test.ts') &&
+    !path.endsWith('.test.tsx')
+  );
+});
+
+for (const file of SECRET_BEARING) {
+  const code = stripComments(readFileSync(file, 'utf8'));
+  const where = relative(ROOT, file);
+
+  for (const symbol of X2_SYMBOLS) {
+    if (new RegExp(`\\b${symbol}\\b`).test(code)) {
+      failures.push(
+        `${where} references ${symbol}. Record encryption is X-2 and is not in scope; ` +
+          'Gate 3 escrows an existing key and must not encrypt domain records.',
+      );
+    }
+  }
+
+  for (const { pattern, name } of PLAINTEXT_STORES) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${where} writes to ${name}, which holds plaintext. ` +
+          'Keys and recovery material go through the Gate 2 custody abstraction.',
+      );
+    }
+  }
+
+  if (SECRET_LOG.test(code)) {
+    failures.push(`${where} logs key material. A secret must never reach a log.`);
+  }
+}
+
 // Every shared package has a public API and a README.
 for (const pkg of readdirSync(join(ROOT, 'packages'))) {
   for (const required of ['src/index.ts', 'README.md', 'package.json']) {

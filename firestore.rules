@@ -177,6 +177,78 @@ service cloud.firestore {
       allow delete: if isOwner(uid);
     }
 
+    // ---- recovery escrow -------------------------------------------------
+
+    // The wrapped data encryption key for zero-trusted-device recovery.
+    //
+    // This is deliberately NOT the `recoveryCodes` path below, and the two are
+    // not alternatives. That path holds recovery-code *hashes*, which are an
+    // authentication credential: verifying one means comparing against a stored
+    // value, and a client that can read the expected value can fake the answer,
+    // so it stays closed until a trusted server can own the comparison. This
+    // path holds no hash and no credential. It holds ciphertext.
+    //
+    // Nothing here is compared, by the client or by anyone else. A recovery code
+    // derives a wrapping key, the wrapping key either opens the AEAD envelope or
+    // does not, and a wrong code produces an authentication-tag failure rather
+    // than an authorization decision. So the owner reading their own escrow
+    // learns nothing they could not already compute, and the rule can be an
+    // ordinary ownership check. See docs/ARCHITECTURE.md, "Why the recovery code
+    // is escrow rather than a factor" — which also records that the
+    // authentication form may be added alongside this one later.
+    //
+    // The shape is an allowlist rather than a denylist, like `isBackupSummary`:
+    // the fields are fully known, so anything else is a mistake. In particular
+    // there is no room for a digest, checksum or verifier of the key or the
+    // code. Such a field would let anyone holding this document test candidate
+    // codes without paying for a key derivation, which is the only thing making
+    // a 60-bit secret expensive to attack offline.
+    function isRecoveryEscrow(escrowId) {
+      return escrowId.matches('^[A-Za-z0-9_-]{1,64}$')
+        && request.resource.data.keys().hasOnly([
+             'id', 'version', 'algorithm', 'kdf', 'iterations',
+             'salt', 'iv', 'wrappedKey', 'createdAt', 'updatedAt'
+           ])
+        && request.resource.data.keys().hasAll([
+             'id', 'version', 'algorithm', 'kdf', 'iterations',
+             'salt', 'iv', 'wrappedKey', 'updatedAt'
+           ])
+        && request.resource.data.id == escrowId
+        && request.resource.data.version == 1
+        && request.resource.data.algorithm == 'AES-GCM'
+        && request.resource.data.kdf == 'PBKDF2-SHA256'
+        // The same bounds packages/security/src/kdfPolicy.ts enforces. Repeated
+        // here because a rule cannot import one, and a document written with a
+        // cost the client would later refuse to read is a key lost silently.
+        && request.resource.data.iterations is int
+        && request.resource.data.iterations >= 100000
+        && request.resource.data.iterations <= 1000000
+        && request.resource.data.salt is string
+        && request.resource.data.iv is string
+        && request.resource.data.wrappedKey is string
+        && request.resource.data.wrappedKey.size() <= 4096
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /users/{uid}/recoveryEscrow/{escrowId} {
+      allow get: if isOwner(uid);
+      // Enumerating an escrow set says how many recovery paths exist. The owner
+      // knows; nobody else needs a listing, and a fixed document id is enough.
+      allow list: if false;
+      allow create: if isOwner(uid)
+        && isRecoveryEscrow(escrowId)
+        && hasNoReservedFields()
+        && request.resource.data.createdAt == request.time;
+      // Re-escrowing under a new code replaces the wrapped copy. createdAt is
+      // pinned to what was already stored so an update cannot rewrite history.
+      allow update: if isOwner(uid)
+        && isRecoveryEscrow(escrowId)
+        && hasNoReservedFields()
+        && request.resource.data.createdAt == resource.data.createdAt;
+      // Deleting is the user's own decision to give up this recovery path.
+      allow delete: if isOwner(uid);
+    }
+
     // ---- client-inaccessible -------------------------------------------
 
     // A verification code is a secret the client must not be able to read, and

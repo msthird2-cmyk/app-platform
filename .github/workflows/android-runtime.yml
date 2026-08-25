@@ -17,16 +17,22 @@ on:
     branches: [main]
     paths:
       - 'packages/security/**'
+      - 'packages/firebase/**'
       - 'tools/x1-selftest/**'
       - '.github/workflows/android-runtime.yml'
       - 'scripts/check-architecture.mjs'
+      - 'firestore.rules'
+      - 'storage.rules'
       - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - 'packages/security/**'
+      - 'packages/firebase/**'
       - 'tools/x1-selftest/**'
       - '.github/workflows/android-runtime.yml'
       - 'scripts/check-architecture.mjs'
+      - 'firestore.rules'
+      - 'storage.rules'
       - 'pnpm-lock.yaml'
   workflow_dispatch:
 
@@ -69,6 +75,25 @@ jobs:
       # working tree hides this, because the artifacts are already lying around.
       - name: Security package tests
         run: pnpm turbo test --filter @platform/security
+
+      # ESLint plus the architecture check, which carries the Gate 3 scope
+      # guard: X-2 record-encryption symbols, writes to a plaintext key-value
+      # store, and logs naming key material all fail here.
+      - name: Lint and scope guard
+        run: pnpm lint
+
+      # The Security Rules are the other half of recovery escrow: the client
+      # may read its own wrapped key and nothing else, and the escrow document
+      # has a fixed shape with no room for a field that could verify a guessed
+      # recovery code. Rules are not typechecked by anything else, so an
+      # unenforced rule would otherwise reach main unnoticed.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Firestore and Storage rules tests
+        run: pnpm test:rules
 
   android-runtime:
     name: Crypto self-test on Hermes (API ${{ matrix.api-level }})

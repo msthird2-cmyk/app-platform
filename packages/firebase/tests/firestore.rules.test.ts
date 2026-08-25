@@ -561,3 +561,191 @@ describe('reserved security fields', () => {
     });
   });
 });
+
+/**
+ * Gate 3 recovery escrow.
+ *
+ * The escrow document is ciphertext plus the metadata needed to open it. It is
+ * readable by its owner precisely because it is not a credential: a wrong
+ * recovery code fails an authentication tag, not an authorization check, so
+ * handing the owner their own wrapped key gives away nothing. That is the whole
+ * reason this path can be open while `recoveryCodes`, which holds hashes a
+ * client could compare against, stays closed.
+ */
+describe('recovery escrow', () => {
+  const ID = 'current';
+  const PATH = `users/${ALICE}/recoveryEscrow/${ID}`;
+
+  /** A well-formed escrow document as the client writes it. */
+  function escrow(extra: Record<string, unknown> = {}) {
+    return {
+      id: ID,
+      version: 1,
+      algorithm: 'AES-GCM',
+      kdf: 'PBKDF2-SHA256',
+      iterations: 210_000,
+      salt: 'c2FsdA==',
+      iv: 'aXZpdml2aXZpdg==',
+      wrappedKey: 'd3JhcHBlZA==',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      ...extra,
+    };
+  }
+
+  async function seedEscrow() {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), PATH), {
+        ...escrow(),
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+    });
+  }
+
+  describe('owner', () => {
+    it('allows creating, reading and deleting their own escrow', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(setDoc(doc(db, PATH), escrow()));
+      await assertSucceeds(getDoc(doc(db, PATH)));
+      await assertSucceeds(deleteDoc(doc(db, PATH)));
+    });
+
+    it('allows re-escrowing under a new recovery code', async () => {
+      await seedEscrow();
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(
+        setDoc(doc(db, PATH), {
+          ...escrow({ wrappedKey: 'ZGlmZmVyZW50', salt: 'bmV3c2FsdA==' }),
+          createdAt: new Date(0),
+        }),
+      );
+    });
+
+    it('is allowed even without a verified email, because recovery precedes it', async () => {
+      // A user recovering an account may not be able to reach their mail. The
+      // escrow is theirs and is not a financial write.
+      const db = unverified(env, ALICE).firestore();
+      await assertSucceeds(setDoc(doc(db, PATH), escrow()));
+    });
+
+    it('denies rewriting createdAt on update', async () => {
+      await seedEscrow();
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), escrow()));
+    });
+
+    it('denies a client-chosen updatedAt', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), escrow({ updatedAt: new Date(0) })));
+    });
+
+    it('denies listing the escrow collection', async () => {
+      await seedEscrow();
+      const db = verified(env, ALICE).firestore();
+      await assertFails(getDocs(collection(db, `users/${ALICE}/recoveryEscrow`)));
+    });
+
+    it('denies a collection group query across every user escrow', async () => {
+      await seedEscrow();
+      const db = verified(env, ALICE).firestore();
+      await assertFails(getDocs(collectionGroup(db, 'recoveryEscrow')));
+    });
+  });
+
+  describe('non-owner', () => {
+    it('denies Bob reading, writing or deleting Alice escrow', async () => {
+      await seedEscrow();
+      const db = verified(env, BOB).firestore();
+      await assertFails(getDoc(doc(db, PATH)));
+      await assertFails(setDoc(doc(db, PATH), escrow()));
+      await assertFails(deleteDoc(doc(db, PATH)));
+    });
+
+    it('denies an unauthenticated client entirely', async () => {
+      await seedEscrow();
+      const db = env.unauthenticatedContext().firestore();
+      await assertFails(getDoc(doc(db, PATH)));
+      await assertFails(setDoc(doc(db, PATH), escrow()));
+    });
+  });
+
+  describe('schema', () => {
+    it('denies a document id that does not match the field', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(
+        setDoc(doc(db, `users/${ALICE}/recoveryEscrow/other`), escrow()),
+      );
+    });
+
+    it('denies a missing required field', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const field of ['id', 'version', 'algorithm', 'kdf', 'iterations',
+                           'salt', 'iv', 'wrappedKey', 'updatedAt']) {
+        const partial = escrow();
+        delete (partial as Record<string, unknown>)[field];
+        await assertFails(setDoc(doc(db, PATH), partial));
+      }
+    });
+
+    it('denies a wrong version or algorithm', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), escrow({ version: 2 })));
+      await assertFails(setDoc(doc(db, PATH), escrow({ algorithm: 'AES-CBC' })));
+      await assertFails(setDoc(doc(db, PATH), escrow({ kdf: 'scrypt' })));
+    });
+
+    it('denies a KDF cost the client would later refuse to read', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const iterations of [0, 1, 99_999, 1_000_001]) {
+        await assertFails(setDoc(doc(db, PATH), escrow({ iterations })));
+      }
+      await assertSucceeds(setDoc(doc(db, PATH), escrow({ iterations: 100_000 })));
+    });
+
+    it('denies wrongly typed fields', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), escrow({ iterations: '210000' })));
+      await assertFails(setDoc(doc(db, PATH), escrow({ salt: 42 })));
+      await assertFails(setDoc(doc(db, PATH), escrow({ wrappedKey: null })));
+      await assertFails(setDoc(doc(db, PATH), escrow({ iv: ['a'] })));
+    });
+
+    it('denies an oversized wrapped key', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), escrow({ wrappedKey: 'A'.repeat(4097) })));
+    });
+
+    it('denies any extra field, which is where a verification oracle would arrive', async () => {
+      // The specific danger: a digest of the key or the code would let anyone
+      // holding this document test candidate codes without paying for a key
+      // derivation. An allowlist refuses the whole category, not one name.
+      const db = verified(env, ALICE).firestore();
+      for (const extra of [
+        { dekHash: 'abc' },
+        { checksum: 'abc' },
+        { recoveryCode: 'K7QM-2XPD-9RTF' },
+        { verifier: 'abc' },
+        { hint: 'my cat' },
+      ]) {
+        await assertFails(setDoc(doc(db, PATH), escrow(extra)));
+      }
+    });
+
+    it('denies reserved authorization fields', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const reserved of [{ uid: ALICE }, { role: 'admin' }, { isAdmin: true }]) {
+        await assertFails(setDoc(doc(db, PATH), escrow(reserved)));
+      }
+    });
+  });
+
+  it('leaves the recovery-code hash path closed to its own owner', async () => {
+    // Gate 3 did not open this. It is the authentication form, and it still
+    // needs a trusted server that Spark does not provide.
+    const db = verified(env, ALICE).firestore();
+    await assertFails(getDoc(doc(db, `users/${ALICE}/recoveryCodes/c1`)));
+    await assertFails(setDoc(doc(db, `users/${ALICE}/recoveryCodes/c1`), { hash: 'x' }));
+    await assertFails(deleteDoc(doc(db, `users/${ALICE}/recoveryCodes/c1`)));
+  });
+});
