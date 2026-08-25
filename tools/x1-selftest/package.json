@@ -1,0 +1,28 @@
+{
+  "name": "@tools/x1-selftest",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "X-1 runtime self-test. Runs the portable crypto path on a real Android/Hermes runtime in CI. Not shipped.",
+  "main": "index.tsx",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.26.0",
+    "@expo/metro-runtime": "~4.0.1",
+    "@platform/security": "workspace:*",
+    "expo": "~52.0.20",
+    "expo-asset": "~11.0.5",
+    "expo-crypto": "~14.0.2",
+    "expo-status-bar": "~2.0.0",
+    "react": "^18.3.1",
+    "react-native": "^0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "babel-preset-expo": "~12.0.4"
+  }
+}
