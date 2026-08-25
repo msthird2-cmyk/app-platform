@@ -23,8 +23,14 @@ fail() {
   exit 1
 }
 
-APK=$(find tools/x1-selftest/android/app/build/outputs/apk/release -name '*.apk' | head -1)
-[ -n "$APK" ] || fail "no release APK found — the Gradle build did not produce one"
+# The Gradle build tree is deleted before this runs, to leave the emulator room
+# for its userdata partition, so the APK is read from where the build step
+# copied it. The find is a fallback for running this script by hand.
+APK="${X1_APK:-}"
+if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+  APK=$(find tools/x1-selftest/android/app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)
+fi
+[ -n "$APK" ] && [ -f "$APK" ] || fail "no release APK found — the Gradle build did not produce one"
 echo "Installing $APK"
 
 adb wait-for-device

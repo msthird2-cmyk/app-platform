@@ -165,7 +165,27 @@ jobs:
           ls /tmp/apk-inspect/lib/*/libhermes* >/dev/null 2>&1 \
             && echo "libhermes present in the APK" \
             || echo "note: libhermes not found as a separate .so (may be linked into libreactnative.so)"
-          echo "APK_PATH=$PWD/$APK" >> "$GITHUB_ENV"
+          # Copied out before the build tree is deleted to make room for the
+          # emulator; the runner script reads X1_APK.
+          cp "$APK" "$HOME/x1-selftest.apk"
+          echo "X1_APK=$HOME/x1-selftest.apk" >> "$GITHUB_ENV"
+
+      # The Gradle build leaves several gigabytes behind — build outputs, the
+      # Gradle cache, and an NDK the Android plugin installs on demand — and the
+      # emulator then cannot create its userdata partition. The APK is already
+      # copied to $HOME, so none of this is needed any more.
+      - name: Free disk space for the emulator
+        run: |
+          echo "--- before ---"; df -h / | tail -1
+          rm -rf tools/x1-selftest/android/app/build tools/x1-selftest/android/.gradle
+          rm -rf ~/.gradle/caches ~/.gradle/wrapper
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/cmake
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/node_modules
+          sudo rm -rf /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null 2>&1 || true
+          echo "--- after ---"; df -h / | tail -1
+          test -f "$X1_APK" || { echo "::error::the APK did not survive the cleanup"; exit 1; }
+          echo "APK preserved: $(du -h "$X1_APK" | cut -f1)"
 
       - name: Run the self-test on the emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -175,7 +195,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           ram-size: 4096M
-          disk-size: 8192M
+          disk-size: 4096M
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
