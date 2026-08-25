@@ -61,8 +61,14 @@ jobs:
       - name: Architecture and portable-path guard
         run: node scripts/check-architecture.mjs
 
+      # Through Turbo, not straight to Vitest. `turbo.json` declares
+      # `test: { dependsOn: ["^build"] }`, and @platform/security imports
+      # @platform/utils, whose `main` is `./dist/index.js` — a build output that
+      # does not exist in a fresh checkout. Calling the package script directly
+      # skipped that build and every suite failed to resolve the import. A local
+      # working tree hides this, because the artifacts are already lying around.
       - name: Security package tests
-        run: pnpm --filter @platform/security test
+        run: pnpm turbo test --filter @platform/security
 
   android-runtime:
     name: Crypto self-test on Hermes (API ${{ matrix.api-level }})
