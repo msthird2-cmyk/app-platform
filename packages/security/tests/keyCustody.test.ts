@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createKeyCustody, type CustodyStorage } from '../src/keyCustody';
 import { InMemorySecureStorage } from '../src/services/InMemorySecureStorage';
 import { OsKeystoreStorage, type SecureStoreBackend } from '../src/services/OsKeystoreStorage';
+import { createPlatformSecureStorage } from '../src/services/createSecureStorage';
 import {
   WebNonExtractableStorage,
   type KeyValueDatabase,
@@ -204,7 +205,23 @@ describe('unreadable is never absent', () => {
 });
 
 describe('OsKeystoreStorage', () => {
-  function backend(overrides: Partial<SecureStoreBackend> = {}) {
+  /**
+   * The platform this mock is standing in for.
+   *
+   * It matters, and this suite originally did not model it: `AFTER_FIRST_UNLOCK`
+   * is read off the native module, and only the iOS module defines it. A mock
+   * that omitted the constant while every test passed `keychainAccessible: 1`
+   * was describing a device that does not exist — an Android backend configured
+   * the iOS way — so the whole suite went green while both emulators failed to
+   * construct secure storage at all. `ios` now carries the constant and
+   * `android` does not, which is the only difference the real modules have.
+   */
+  type Platform = 'ios' | 'android';
+
+  function backend(
+    platform: Platform = 'android',
+    overrides: Partial<SecureStoreBackend> = {},
+  ) {
     const entries = new Map<string, string>();
     const calls: Array<{ op: string; options?: unknown }> = [];
     const base: SecureStoreBackend = {
@@ -224,12 +241,18 @@ describe('OsKeystoreStorage', () => {
         entries.delete(key);
       },
     };
-    return { store: { ...base, ...overrides }, entries, calls };
+    const platformConstants =
+      platform === 'ios' ? { AFTER_FIRST_UNLOCK: 1 } : {};
+    return {
+      store: { ...base, ...platformConstants, ...overrides },
+      entries,
+      calls,
+    };
   }
 
   it('reports the keystore tier and round-trips a key', async () => {
-    const { store, entries } = backend();
-    const storage = await OsKeystoreStorage.create(store, { keychainAccessible: 1 });
+    const { store, entries } = backend('android');
+    const storage = await OsKeystoreStorage.create(store, {});
     expect(storage.protection).toBe('os-keystore');
 
     const custody = createKeyCustody(storage);
@@ -249,25 +272,25 @@ describe('OsKeystoreStorage', () => {
   });
 
   it('fails closed when SecureStore is unavailable', async () => {
-    const { store } = backend({ isAvailableAsync: async () => false });
-    await expect(
-      OsKeystoreStorage.create(store, { keychainAccessible: 1 }),
-    ).rejects.toMatchObject({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE });
+    const { store } = backend('android', { isAvailableAsync: async () => false });
+    await expect(OsKeystoreStorage.create(store, {})).rejects.toMatchObject({
+      code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE,
+    });
   });
 
   it('fails closed when the availability check itself throws', async () => {
-    const { store } = backend({
+    const { store } = backend('android', {
       isAvailableAsync: async () => {
         throw new Error('no native module');
       },
     });
-    await expect(
-      OsKeystoreStorage.create(store, { keychainAccessible: 1 }),
-    ).rejects.toMatchObject({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE });
+    await expect(OsKeystoreStorage.create(store, {})).rejects.toMatchObject({
+      code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE,
+    });
   });
 
   it('passes the accessibility through and never requires authentication', async () => {
-    const { store, calls } = backend();
+    const { store, calls } = backend('ios');
     const storage = await OsKeystoreStorage.create(store, {
       keychainAccessible: 42,
       keychainService: 'net-worth',
@@ -284,20 +307,61 @@ describe('OsKeystoreStorage', () => {
   });
 
   it('lets a read failure propagate instead of reporting absence', async () => {
-    const { store } = backend({
+    const { store } = backend('android', {
       getItemAsync: async () => {
         throw new Error('keystore key invalidated');
       },
     });
-    const storage = await OsKeystoreStorage.create(store, { keychainAccessible: 1 });
+    const storage = await OsKeystoreStorage.create(store, {});
     await expect(storage.get('k')).rejects.toThrow();
     await expect(createKeyCustody(storage).status()).resolves.toBe('unusable');
   });
 
+  // The four cases below are the regression for a defect the emulator gate
+  // caught and this suite did not: requiring a numeric keychainAccessible on
+  // every platform made Android unable to construct secure storage at all.
+  // Both API 29 and API 34 threw SECURE_STORAGE_UNAVAILABLE immediately after
+  // reporting expo-secure-store as available.
+
+  it('constructs on Android, which has no accessibility constant', async () => {
+    const { store } = backend('android');
+    const storage = await OsKeystoreStorage.create(store, {});
+    expect(storage.protection).toBe('os-keystore');
+  });
+
+  it('omits keychainAccessible entirely on Android', async () => {
+    const { store, calls } = backend('android');
+    const storage = await OsKeystoreStorage.create(store, {});
+    await storage.set('k', 'v');
+    await storage.get('k');
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call.options).not.toHaveProperty('keychainAccessible');
+      expect(call.options).toMatchObject({ requireAuthentication: false });
+    }
+  });
+
+  it('refuses an accessibility value on a platform that would drop it', async () => {
+    const { store } = backend('android');
+    await expect(
+      OsKeystoreStorage.create(store, { keychainAccessible: 1 }),
+    ).rejects.toMatchObject({ code: SecurityErrorCode.SECURE_STORAGE_MISCONFIGURED });
+  });
+
+  it('still refuses to take the iOS WHEN_UNLOCKED default', async () => {
+    // The original guard was right about this platform, and it stays closed:
+    // omitting the choice on iOS silently yields a store that works in the
+    // foreground and fails every background read.
+    const { store } = backend('ios');
+    await expect(OsKeystoreStorage.create(store, {})).rejects.toMatchObject({
+      code: SecurityErrorCode.SECURE_STORAGE_MISCONFIGURED,
+    });
+  });
+
   it('clears only what it wrote', async () => {
-    const { store, entries } = backend();
+    const { store, entries } = backend('android');
     entries.set('someone.elses.key', 'not ours');
-    const storage = await OsKeystoreStorage.create(store, { keychainAccessible: 1 });
+    const storage = await OsKeystoreStorage.create(store, {});
     await storage.set('ours', 'value');
     await storage.clear();
     expect(entries.has('ours')).toBe(false);
@@ -407,5 +471,82 @@ describe('WebNonExtractableStorage', () => {
     await expect(
       WebNonExtractableStorage.create({ subtle, database: broken, randomBytes }),
     ).rejects.toMatchObject({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE });
+  });
+});
+
+
+/**
+ * The selector had no tests at all, which is how it shipped rejecting Android.
+ *
+ * Every unit test constructed OsKeystoreStorage directly, so nothing exercised
+ * the one function the applications and the runtime harness actually call —
+ * and its guard, `typeof keychainAccessible !== 'number'`, cannot be satisfied
+ * on a platform whose module defines no accessibility constants. Both emulators
+ * threw here immediately after reporting expo-secure-store as available.
+ */
+describe('createPlatformSecureStorage', () => {
+  function nativeBackend(platform: 'ios' | 'android'): SecureStoreBackend {
+    const entries = new Map<string, string>();
+    const base: SecureStoreBackend = {
+      async isAvailableAsync() {
+        return true;
+      },
+      async getItemAsync(key) {
+        return entries.get(key) ?? null;
+      },
+      async setItemAsync(key, value) {
+        entries.set(key, value);
+      },
+      async deleteItemAsync(key) {
+        entries.delete(key);
+      },
+    };
+    return platform === 'ios' ? { ...base, AFTER_FIRST_UNLOCK: 1 } : base;
+  }
+
+  it('builds Android storage from the call the applications actually make', async () => {
+    // Exactly what apps/*/index.tsx and the X-1 harness pass: the constant is
+    // read unconditionally, and on Android it evaluates to undefined.
+    const secureStore = nativeBackend('android');
+    const storage = await createPlatformSecureStorage({
+      secureStore,
+      keychainAccessible: (secureStore as { AFTER_FIRST_UNLOCK?: number }).AFTER_FIRST_UNLOCK,
+    });
+    expect(storage.protection).toBe('os-keystore');
+
+    // And it is a working store, not merely a constructed one.
+    const custody = createKeyCustody(storage);
+    expect(await custody.status()).toBe('absent');
+    await custody.store(TEST_DEK);
+    expect(Array.from((await custody.load()) as Uint8Array)).toEqual(Array.from(TEST_DEK));
+  });
+
+  it('builds iOS storage from the same call', async () => {
+    const secureStore = nativeBackend('ios');
+    const storage = await createPlatformSecureStorage({
+      secureStore,
+      keychainAccessible: (secureStore as { AFTER_FIRST_UNLOCK?: number }).AFTER_FIRST_UNLOCK,
+    });
+    expect(storage.protection).toBe('os-keystore');
+  });
+
+  it('refuses iOS without an explicit accessibility choice', async () => {
+    await expect(
+      createPlatformSecureStorage({ secureStore: nativeBackend('ios') }),
+    ).rejects.toMatchObject({ code: SecurityErrorCode.SECURE_STORAGE_MISCONFIGURED });
+  });
+
+  it('fails closed when the runtime offers no secure tier at all', async () => {
+    await expect(createPlatformSecureStorage({})).rejects.toMatchObject({
+      code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE,
+    });
+  });
+
+  it('never falls back to process memory', async () => {
+    // The absence of a fallback is the invariant; assert it as one.
+    await expect(createPlatformSecureStorage({})).rejects.toThrow();
+    await expect(
+      createPlatformSecureStorage({ subtle: undefined, database: undefined }),
+    ).rejects.toThrow();
   });
 });

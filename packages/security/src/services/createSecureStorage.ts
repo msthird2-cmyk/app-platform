@@ -29,9 +29,14 @@ export interface PlatformSecureStorageOptions {
    */
   secureStore?: SecureStoreBackend | undefined;
   /**
-   * `SecureStore.AFTER_FIRST_UNLOCK`. Required alongside `secureStore`:
-   * the library's `WHEN_UNLOCKED` default makes every read fail while the
-   * screen is locked, which is exactly when background sync runs.
+   * Pass `SecureStore.AFTER_FIRST_UNLOCK` — on every platform, unconditionally.
+   *
+   * On iOS that is a number and is required, because the library's
+   * `WHEN_UNLOCKED` default makes every read fail while the screen is locked,
+   * which is exactly when background sync runs. On Android the same expression
+   * evaluates to `undefined`, because the platform has no such setting, and
+   * passing it through is correct there too. `OsKeystoreStorage` enforces the
+   * rule for whichever platform the injected backend turns out to be.
    */
   keychainAccessible?: number | undefined;
   keychainService?: string | undefined;
@@ -48,14 +53,11 @@ export async function createPlatformSecureStorage(
   const { secureStore, keychainAccessible, subtle, database, randomBytes } = options;
 
   if (secureStore) {
-    if (typeof keychainAccessible !== 'number') {
-      // Refusing here rather than silently taking the library default, which
-      // would produce a store that works in the foreground and fails in the
-      // background — the worst kind of bug to discover in production.
-      throw new SecurityError(SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE);
-    }
+    // No accessibility check here. It lives in OsKeystoreStorage.create, which
+    // has the backend in hand and so can tell iOS from Android; duplicating it
+    // here is how this selector came to reject Android outright.
     return OsKeystoreStorage.create(secureStore, {
-      keychainAccessible,
+      ...(keychainAccessible === undefined ? {} : { keychainAccessible }),
       ...(options.keychainService === undefined
         ? {}
         : { keychainService: options.keychainService }),

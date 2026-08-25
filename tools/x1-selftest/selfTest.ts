@@ -246,6 +246,17 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
     const secureStoreAvailable = await SecureStore.isAvailableAsync();
     record('expo-secure-store is available', secureStoreAvailable);
 
+    // Record the platform fact this gate exists to establish. The accessibility
+    // constants are read off the native module and only the iOS module defines
+    // them, so on Android this must be undefined. A build where it became a
+    // number would mean the library changed under us, and the conditional rule
+    // in OsKeystoreStorage would then start demanding a choice here.
+    record(
+      'keychain accessibility is an iOS-only concept on this device',
+      SecureStore.AFTER_FIRST_UNLOCK === undefined,
+      `AFTER_FIRST_UNLOCK=${String(SecureStore.AFTER_FIRST_UNLOCK)}`,
+    );
+
     if (secureStoreAvailable) {
       const storage = await createPlatformSecureStorage({
         secureStore: SecureStore,
