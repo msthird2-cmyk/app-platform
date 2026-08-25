@@ -1,0 +1,186 @@
+name: X-1 Android runtime
+
+# Closes the runtime half of X-1.
+#
+# The host suite proves the portable crypto path is correct under Node and V8.
+# Hermes is a different engine with its own typed-array and 32-bit arithmetic
+# implementation, and a divergence there would not crash — it would produce
+# different bytes, surfacing much later as a backup that will not open. So the
+# same operations are run on the real engine, on a real Android system image.
+#
+# Nothing here is allowed to make the test easier to pass: the KDF cost is the
+# shipped default, the engine must be Hermes or the job fails, and the five
+# browser globals are deleted before the security package is even imported.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/security/**'
+      - 'tools/x1-selftest/**'
+      - '.github/workflows/android-runtime.yml'
+      - 'scripts/check-architecture.mjs'
+      - 'pnpm-lock.yaml'
+  pull_request:
+    paths:
+      - 'packages/security/**'
+      - 'tools/x1-selftest/**'
+      - '.github/workflows/android-runtime.yml'
+      - 'scripts/check-architecture.mjs'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Cheap and independent of the emulator: if the portable path has picked up a
+  # dependency on a browser global, say so in seconds rather than after a
+  # twenty-minute Android build.
+  static-guard:
+    name: No browser globals on the portable path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Walks imports out from PortableCryptoService and from recoveryCodes and
+      # fails on crypto.subtle, crypto.getRandomValues, btoa, atob, TextEncoder
+      # or TextDecoder anywhere on either path.
+      - name: Architecture and portable-path guard
+        run: node scripts/check-architecture.mjs
+
+      - name: Security package tests
+        run: pnpm --filter @platform/security test
+
+  android-runtime:
+    name: Crypto self-test on Hermes (API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    needs: static-guard
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 29 is the project's practical floor and the slowest arithmetic; 34 is
+        # what current devices run. A Hermes divergence that only appears on one
+        # of them is exactly what this is for.
+        api-level: [29, 34]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub's ubuntu runners expose /dev/kvm but not to unprivileged users.
+      # Without this the emulator falls back to software rendering and times out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -w /dev/kvm && echo "KVM is writable"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # Expo SDK 52 / React Native 0.76 build with AGP 8, which needs JDK 17.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        run: pnpm turbo build --filter @platform/security...
+
+      # `android/` is gitignored and generated here, so the committed tree stays
+      # a managed Expo project and CI builds the same way a developer would.
+      - name: Prebuild the Android project
+        working-directory: tools/x1-selftest
+        run: npx expo prebuild --platform android --no-install
+
+      # The whole exercise is void if the app ships a different engine, so this
+      # is checked before anything is built rather than inferred afterwards.
+      - name: Assert Hermes is the configured engine
+        working-directory: tools/x1-selftest
+        run: |
+          grep -q '^hermesEnabled=true' android/gradle.properties \
+            || { echo "::error::Hermes is not enabled — the runtime test would not exercise it"; exit 1; }
+          echo "hermesEnabled=true confirmed"
+
+      # Release, not debug: a debug APK expects a Metro server, while a release
+      # APK embeds the Hermes bytecode that is actually under test. The Expo
+      # template signs release with the debug keystore, so no secret is needed.
+      # Only x86_64 is built: that is the emulator's ABI, and compiling the
+      # other three costs most of the build time while testing nothing here.
+      # This selects which native binaries are packaged — it does not change the
+      # JavaScript, the engine, or anything the self-test exercises.
+      - name: Build the release APK
+        working-directory: tools/x1-selftest/android
+        run: |
+          ./gradlew :app:assembleRelease \
+            -PreactNativeArchitectures=x86_64 \
+            --no-daemon --stacktrace
+
+      - name: Confirm the APK contains Hermes bytecode
+        working-directory: tools/x1-selftest
+        run: |
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK: $APK"
+          unzip -o -q "$APK" -d /tmp/apk-inspect
+          test -f /tmp/apk-inspect/assets/index.android.bundle \
+            || { echo "::error::no JS bundle in the APK"; exit 1; }
+          MAGIC=$(head -c 8 /tmp/apk-inspect/assets/index.android.bundle | od -An -tx1 | tr -d ' \n')
+          echo "bundle magic: $MAGIC"
+          # c61fbc03c103191f is the Hermes bytecode file magic. Plain JS here
+          # would mean the build silently produced a non-Hermes bundle.
+          test "$MAGIC" = "c61fbc03c103191f" \
+            || { echo "::error::bundle is not Hermes bytecode (magic $MAGIC)"; exit 1; }
+          ls /tmp/apk-inspect/lib/*/libhermes* >/dev/null 2>&1 \
+            && echo "libhermes present in the APK" \
+            || echo "note: libhermes not found as a separate .so (may be linked into libreactnative.so)"
+          echo "APK_PATH=$PWD/$APK" >> "$GITHUB_ENV"
+
+      - name: Run the self-test on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disk-size: 8192M
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash .github/scripts/run-x1-selftest.sh
+
+      - name: Upload the self-test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x1-selftest-api${{ matrix.api-level }}
+          path: |
+            x1-selftest.log
+            x1-selftest-full-logcat.log
+          if-no-files-found: warn

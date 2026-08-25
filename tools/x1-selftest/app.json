@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "X1 Self Test",
+    "slug": "x1-selftest",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.appplatform.x1selftest"
+    }
+  }
+}

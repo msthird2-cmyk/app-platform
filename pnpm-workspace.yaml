@@ -1,3 +1,6 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+  # Build and CI harnesses. Not products, not shared platform code — nothing in
+  # apps/ or packages/ may depend on anything here.
+  - 'tools/*'
