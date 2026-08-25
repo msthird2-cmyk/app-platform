@@ -6,6 +6,36 @@ export type {
   SecretHash,
 } from './types/crypto';
 export type { SecureStorage, BiometricsService } from './types/storage';
+export {
+  type ProtectionTier,
+  type RequiredProtectionTier,
+  meetsProtection,
+  assertMeetsProtection,
+} from './protectionTier';
+export {
+  type KeyCustody,
+  type KeyCustodyStatus,
+  type KeyCustodyOptions,
+  type CustodyStorage,
+  createKeyCustody,
+} from './keyCustody';
+export {
+  OsKeystoreStorage,
+  type SecureStoreBackend,
+  type SecureStoreItemOptions,
+  type OsKeystoreStorageOptions,
+} from './services/OsKeystoreStorage';
+export {
+  createPlatformSecureStorage,
+  type PlatformSecureStorageOptions,
+} from './services/createSecureStorage';
+export {
+  WebNonExtractableStorage,
+  createIndexedDbDatabase,
+  type KeyValueDatabase,
+  type SubtleLike,
+  type WebNonExtractableStorageOptions,
+} from './services/WebNonExtractableStorage';
 export { WebCryptoService } from './services/WebCryptoService';
 export {
   createCryptoService,

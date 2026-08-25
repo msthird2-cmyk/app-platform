@@ -2,7 +2,8 @@ import { AppCore } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { InMemoryRepository } from '@platform/data';
 import { getRandomBytes } from 'expo-crypto';
-import { InMemorySecureStorage, createCryptoService } from '@platform/security';
+import { createCryptoService } from '@platform/security';
+import type { SecureStorage } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
@@ -14,12 +15,19 @@ export const COLLECTIONS = ['expenses', 'budgets', 'rules'] as const;
 
 export interface ExpenseAppProps {
   authService: AuthService;
+  secureStorage: SecureStorage;
   accountService: AccountService;
   backupService: BackupService;
   now?: Date;
 }
 
-export default function App({ authService, accountService, backupService, now }: ExpenseAppProps) {
+export default function App({
+  authService,
+  accountService,
+  backupService,
+  secureStorage,
+  now,
+}: ExpenseAppProps) {
   return (
     <AppCore
       appName="Expense"
@@ -29,7 +37,7 @@ export default function App({ authService, accountService, backupService, now }:
       backupService={backupService}
       repository={new InMemoryRepository()}
       cryptoService={createCryptoService({ randomBytes: getRandomBytes })}
-      secureStorage={new InMemorySecureStorage()}
+      secureStorage={secureStorage}
       signedOut={
         <LoginScreen
           messageForCode={messageForCode}

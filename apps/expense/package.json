@@ -28,6 +28,7 @@
     "@platform/utils": "workspace:*",
     "expo": "~52.0.20",
     "expo-crypto": "~14.0.2",
+    "expo-secure-store": "~14.0.1",
     "expo-status-bar": "~2.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

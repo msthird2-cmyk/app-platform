@@ -1,4 +1,5 @@
 import { SecurityError, SecurityErrorCode } from './errors';
+import { assertMeetsProtection, type RequiredProtectionTier } from './protectionTier';
 import type { SecureStorage } from './types/storage';
 
 export interface SessionTokens {
@@ -48,10 +49,11 @@ export interface SessionStore {
  * carries access and refresh tokens, so writing it to AsyncStorage or
  * localStorage would leave them in plaintext; this fails closed instead.
  */
-export function createSessionStore(storage: SecureStorage): SessionStore {
-  if (!storage.isHardwareBacked) {
-    throw new SecurityError(SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE);
-  }
+export function createSessionStore(
+  storage: SecureStorage,
+  minimumProtection: RequiredProtectionTier = 'os-keystore',
+): SessionStore {
+  assertMeetsProtection(storage.protection, minimumProtection);
   return {
     async load() {
       const raw = await storage.get(SESSION_KEY);

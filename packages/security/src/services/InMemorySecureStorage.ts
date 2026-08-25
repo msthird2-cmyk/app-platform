@@ -1,11 +1,13 @@
+import type { ProtectionTier } from '../protectionTier';
 import type { SecureStorage } from '../types/storage';
 
 /**
- * Fallback used in tests and on platforms without a keystore. It is explicitly
- * not hardware-backed, so callers holding token material will refuse to use it.
+ * Fallback used in tests. It reports the `memory` tier, so every caller that
+ * requires real protection refuses it — which is the point. Nothing here
+ * survives a process exit, and no production secret should ever reach it.
  */
 export class InMemorySecureStorage implements SecureStorage {
-  readonly isHardwareBacked = false;
+  readonly protection: ProtectionTier = 'memory';
 
   private readonly entries = new Map<string, string>();
 

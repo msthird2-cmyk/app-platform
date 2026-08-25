@@ -282,6 +282,10 @@ theatre — the attacker's easiest move is then to make the key look unavailable
 
 `SecureStorage` is a security guarantee, not a naming convention. Native secret storage must use an approved platform secure/keystore-backed implementation. Do not silently use AsyncStorage or equivalent plaintext key-value storage for tokens, keys or recovery material.
 
+The guarantee is expressed as a tier — `os-keystore`, `browser-nonextractable`, `memory` — rather than as a `hardwareBacked` boolean, because the boolean promised something no implementation can check. `expo-secure-store` offers `isAvailableAsync` and `canUseBiometricAuthentication` and nothing that reports whether the underlying keystore key is hardware-backed. A store setting such a flag would be asserting a fact it has no way to establish, which is the same defect that removed client-side device verification from this codebase. A tier is a claim an implementation can stand behind.
+
+Key custody is deliberately narrower than the storage interface, and deliberately cannot create a key. The reason is one specific failure: on Android, a keystore key invalidated by a lock-screen change leaves the stored ciphertext intact and unreadable. Code that treats "cannot read" as "nothing stored" will generate a replacement key and silently orphan every record encrypted under the original — the user's data still exists and can never be opened again. So the three states are `absent`, `present` and `unusable`, `load()` returns `null` for absence alone, and generation lives somewhere else entirely.
+
 Web storage is a different threat model. Never store passwords, recovery codes, encryption keys or long-lived authentication secrets in plain `localStorage`. Prefer in-memory handling or a specifically reviewed browser mechanism and document the residual risk.
 
 App-lock state must persist across restart using secure storage. Failed-attempt counters must not reset after each lockout. Use an escalating/documented lockout policy. App lock remains an additional local control, not authorization.

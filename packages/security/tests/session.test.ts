@@ -11,6 +11,7 @@ import {
 import { InMemorySecureStorage } from '../src/services/InMemorySecureStorage';
 import { SecurityErrorCode } from '../src/errors';
 import type { SecureStorage } from '../src/types/storage';
+import type { ProtectionTier } from '../src/protectionTier';
 
 const NOW = 1_700_000_000_000;
 
@@ -20,7 +21,12 @@ function session(expiresAt: number): SessionState {
 
 /** Stands in for a Keychain or Android Keystore implementation. */
 class KeystoreBackedStorage extends InMemorySecureStorage implements SecureStorage {
-  override readonly isHardwareBacked = true;
+  override readonly protection: ProtectionTier = 'os-keystore';
+}
+
+/** The browser tier: real protection, but not the platform keystore. */
+class BrowserBackedStorage extends InMemorySecureStorage implements SecureStorage {
+  override readonly protection: ProtectionTier = 'browser-nonextractable';
 }
 
 describe('session lifetime', () => {
@@ -55,7 +61,26 @@ describe('session store', () => {
     );
   });
 
-  it('round-trips through hardware-backed storage', async () => {
+  it('refuses the browser tier for tokens unless the caller lowers the bar', () => {
+    // Tokens default to the keystore, as they always have. A web application
+    // that knowingly accepts the weaker tier has to say so.
+    expect(() => createSessionStore(new BrowserBackedStorage())).toThrowError(
+      expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
+    );
+    expect(() =>
+      createSessionStore(new BrowserBackedStorage(), 'browser-nonextractable'),
+    ).not.toThrow();
+  });
+
+  it('still refuses process memory even at the lowest expressible bar', () => {
+    expect(() =>
+      createSessionStore(new InMemorySecureStorage(), 'browser-nonextractable'),
+    ).toThrowError(
+      expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
+    );
+  });
+
+  it('round-trips through keystore-backed storage', async () => {
     const store = createSessionStore(new KeystoreBackedStorage());
     await store.save(session(NOW + 1000));
     await expect(store.load()).resolves.toMatchObject({ userId: 'user-1' });

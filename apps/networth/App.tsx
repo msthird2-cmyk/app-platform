@@ -2,7 +2,8 @@ import { AppCore } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { InMemoryRepository } from '@platform/data';
 import { getRandomBytes } from 'expo-crypto';
-import { InMemorySecureStorage, createCryptoService } from '@platform/security';
+import { createCryptoService } from '@platform/security';
+import type { SecureStorage } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
@@ -14,6 +15,7 @@ export const COLLECTIONS = ['assets', 'liabilities', 'snapshots'] as const;
 
 export interface NetWorthAppProps {
   authService: AuthService;
+  secureStorage: SecureStorage;
   accountService: AccountService;
   backupService: BackupService;
 }
@@ -22,7 +24,7 @@ export interface NetWorthAppProps {
  * Composition root for Net Worth. Concrete services are injected here — the
  * production entry point passes the Firebase implementations.
  */
-export default function App({ authService, accountService, backupService }: NetWorthAppProps) {
+export default function App({ authService, accountService, backupService, secureStorage }: NetWorthAppProps) {
   return (
     <AppCore
       appName="Net Worth"
@@ -32,7 +34,7 @@ export default function App({ authService, accountService, backupService }: NetW
       backupService={backupService}
       repository={new InMemoryRepository()}
       cryptoService={createCryptoService({ randomBytes: getRandomBytes })}
-      secureStorage={new InMemorySecureStorage()}
+      secureStorage={secureStorage}
       signedOut={
         <LoginScreen
           messageForCode={messageForCode}

@@ -1,16 +1,18 @@
-import type { SecureStorage } from '@platform/security';
+import type { ProtectionTier, SecureStorage } from '@platform/security';
 
 export interface AdaptedSecureStorageOptions {
   /**
-   * Set only when the backing store is a real platform keystore — Keychain,
-   * Android Keystore, `expo-secure-store` or equivalent. AsyncStorage and
-   * `localStorage` are **not** hardware-backed: they hold plaintext, readable
-   * on a rooted device or by any injected script.
+   * The tier the backing store actually provides.
    *
-   * Callers that persist token material check this and refuse to write when it
-   * is false, so claiming it falsely defeats the check.
+   * `os-keystore` only when the backing really is a platform keystore —
+   * Keychain, Android Keystore, `expo-secure-store`. AsyncStorage and
+   * `localStorage` are `memory` at best: they hold plaintext, readable on a
+   * rooted device or by any injected script.
+   *
+   * Callers that persist secrets compare this against the tier they require and
+   * refuse to write when it falls short, so overstating it defeats the check.
    */
-  hardwareBacked: boolean;
+  protection: ProtectionTier;
 }
 
 /**
@@ -19,7 +21,7 @@ export interface AdaptedSecureStorageOptions {
  * fallback) and this class only normalizes the interface.
  */
 export class AdaptedSecureStorage implements SecureStorage {
-  readonly isHardwareBacked: boolean;
+  readonly protection: ProtectionTier;
 
   constructor(
     private readonly backing: {
@@ -30,7 +32,7 @@ export class AdaptedSecureStorage implements SecureStorage {
     },
     options: AdaptedSecureStorageOptions,
   ) {
-    this.isHardwareBacked = options.hardwareBacked;
+    this.protection = options.protection;
   }
 
   async get(key: string): Promise<string | null> {
