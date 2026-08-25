@@ -1,10 +1,12 @@
 import type { SecureStorage } from '../types/storage';
 
 /**
- * Fallback used in tests and on platforms without a keystore. Applications
- * inject a keychain/keystore-backed implementation in production.
+ * Fallback used in tests and on platforms without a keystore. It is explicitly
+ * not hardware-backed, so callers holding token material will refuse to use it.
  */
 export class InMemorySecureStorage implements SecureStorage {
+  readonly isHardwareBacked = false;
+
   private readonly entries = new Map<string, string>();
 
   async get(key: string): Promise<string | null> {

@@ -28,9 +28,10 @@ export class InMemoryRepository<T extends object = Record<string, unknown>> impl
     return options.limit ? records.slice(0, options.limit) : records;
   }
 
-  async put(collection: string, record: SyncableRecord<T>): Promise<void> {
+  async put(collection: string, record: SyncableRecord<T>): Promise<SyncableRecord<T>> {
     if (!record.id) throw new DataError(DataErrorCode.RECORD_INVALID);
     this.bucket(collection).set(record.id, record);
+    return record;
   }
 
   async delete(collection: string, id: string, deletedAt: number): Promise<void> {

@@ -28,6 +28,26 @@ describe('InMemoryAuthService', () => {
     expect(JSON.stringify(user)).not.toContain('correct1horse');
   });
 
+  it('sends an address verification message on signup', async () => {
+    const service = new InMemoryAuthService();
+    expect(service.verificationsSent).toBe(0);
+    await service.signUp({ email: 'new@example.com', password: 'correct1horse' });
+    expect(service.verificationsSent).toBe(1);
+  });
+
+  it('can resend verification for the signed-in account', async () => {
+    const service = new InMemoryAuthService({ users: SEED, signedInAs: 'you@example.com' });
+    await service.resendEmailVerification();
+    expect(service.verificationsSent).toBe(1);
+  });
+
+  it('refuses to resend when nobody is signed in', async () => {
+    const service = new InMemoryAuthService({ users: SEED });
+    await expect(service.resendEmailVerification()).rejects.toMatchObject({
+      code: AuthErrorCode.USER_NOT_FOUND,
+    });
+  });
+
   it('refuses a duplicate signup', async () => {
     const service = new InMemoryAuthService({ users: SEED });
     await expect(

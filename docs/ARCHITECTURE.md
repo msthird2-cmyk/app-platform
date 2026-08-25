@@ -167,6 +167,8 @@ That is client-authoritative and provides no security boundary.
 
 On Spark, prefer Firebase Authentication capabilities. If a custom challenge requires trusted issuance/comparison or reliable rate limiting, defer it or introduce a trusted backend. A Firestore document containing the expected secret must never be client-readable.
 
+Trusted-device pairing is the case that looks similar and is not. There the server relays public keys and wrapped key material; it holds no secret a client could read, and no client writes a verdict. The decision is made by a person comparing a short code on two screens, and the key transfer is protected by the ECDH transport key regardless of what the relay does. A hostile relay can stall a pairing or substitute its own public key — which is exactly what the code comparison catches — but it cannot learn the key. That is why pairing survives the scrutiny that rules out the flow above.
+
 ## Recovery codes
 
 Recovery codes are account-recovery secrets and must be generated with CSPRNG.
@@ -197,7 +199,84 @@ Encrypted envelopes must be versioned. Before expensive key derivation, validate
 
 Use AES-GCM additional authenticated data (AAD) to bind security context where appropriate, including application identity and envelope/schema version; bind the authenticated user identity when the keying model permits it. A backup from one application/context must not silently become valid in another merely because the passphrase matches.
 
-Existing encrypted formats must have a migration strategy before changing the envelope or KDF contract.
+Existing encrypted formats must have a migration strategy before changing the envelope or KDF contract. The React Native implementation was added without changing it: `PortableCryptoService` and `WebCryptoService` write the same version-1 envelope byte for byte, which is asserted directly — each decrypts what the other wrote, and both open a payload recorded from the implementation that predates the split. A backup taken on the web therefore restores on a phone, which is the only reason a second implementation was acceptable at all.
+
+The KDF cost policy is stated once and applied at both ends: when a service is configured and again when a payload or stored hash is read. Two authorities disagreeing is how a service comes to produce data it will later refuse, and that failure surfaces on the restore rather than at the mistake.
+
+## Encryption key architecture
+
+An approved design, not a description of code. Nothing here is implemented yet.
+`CLAUDE.md` states it as rules; this explains why each rule is what it is, so
+that an implementer who disagrees is arguing with a reason rather than a
+preference.
+
+The goal is that financial records stop being readable by anyone holding the
+database — including whoever operates the Firebase project. That means
+encrypting on the device, before the write, with a key the server never sees.
+
+**Why the key is random.** The obvious design derives the key from the user's
+password: nothing to store, nothing to transfer, and remembering the password is
+the whole of recovery. It fails at both ends. A password change re-derives the
+key, so every record must be re-encrypted or the old ones become unreadable; and
+a key that is a function of a guessable secret is only as strong as that secret,
+forever, with no way to raise the bar later. So the DEK is random and everything
+else *wraps* it. Changing a passphrase rewrites one wrapped copy. Adding a
+recovery path adds a wrapped copy. Adding a device adds a wrapped copy. The
+records never move. This is why disk encryption separates the volume key from
+the user's password, and it is worth the machinery of having a key to manage.
+
+**Why pairing is the normal path.** Two devices need the same key and the server
+must not learn it. ECDH gives both a shared transport key without either sending
+a secret. What ECDH alone does not give is any assurance about who is on the
+other end — a relay that substitutes its own public keys sits in the middle of
+both halves. That is what the human-visible code is for: it is derived from both
+public keys, so a substituted key changes it, and a person looking at two screens
+catches what no client-side check could. This is the one place where a human is a
+load-bearing part of the protocol, and it is deliberate; the alternative is a
+trusted server, which Spark does not provide.
+
+Recovery is the exception rather than the default because it is the weakest link
+— a single secret that reconstructs everything. Making it routine would mean
+users handling it often, which is how such a secret leaks.
+
+**Why the recovery code is escrow rather than a factor.** As an authentication
+factor, a code is compared against something stored, and the comparison must
+happen somewhere trusted, because a client that can read the expected value can
+fake the answer. That is a server capability, and on Spark there is none. As key
+escrow, nothing is compared: the code is key material, it unwraps a wrapped DEK,
+and a wrong code produces an authentication-tag failure rather than a mismatch
+someone must adjudicate. The check *is* the decryption. No server is involved and
+it works on Spark today. The approved architecture uses the escrow form; if
+server infrastructure arrives later the authentication form can be added
+alongside it, and neither makes the other unnecessary.
+
+**Why the passphrase is optional and is not the DEK.** It exists because some
+users want a recovery path they can hold in their head rather than on paper. It
+wraps the DEK exactly as the recovery code does — one more wrapped copy. It is
+optional because requiring it would make every record read wait on a human, and
+it is not the DEK because deriving the key from it reintroduces every problem
+above.
+
+**Why it is shared.** Encryption is the most expensive thing to get wrong and
+the worst thing to have three versions of. Every application here stores records
+with the same shape, the same sync engine and the same ownership model, so they
+have the same requirement; the only per-application question is which fields are
+sensitive, and that is a declaration rather than an implementation. Key material
+belongs to `packages/security` and the envelope to `packages/data`, which the
+dependency table already permits — no new direction and no new package.
+
+**What it costs.** Three costs, accepted deliberately. *Server-side query is
+gone* for encrypted fields: an opaque payload cannot be filtered or ordered by
+Firestore. The repository contract offers no domain-field query today, so nothing
+is lost yet, but the door is closed — a field left in plaintext so a query keeps
+working defeats the design. *Losing everything means losing everything*: a user
+with no trusted device, no recovery code and no passphrase has no path back, and
+there is deliberately no operator override, because an override is a master key
+and a master key means the data was never end-to-end encrypted. That has to be
+stated plainly in the product, not buried. *There is no plaintext fallback*: when
+the key is unavailable the system reports that it cannot decrypt and does not
+write plaintext instead, because silent fallback is what makes the whole thing
+theatre — the attacker's easiest move is then to make the key look unavailable.
 
 ## Secure local storage and app lock
 

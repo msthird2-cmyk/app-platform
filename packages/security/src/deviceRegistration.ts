@@ -17,12 +17,16 @@ export interface DeviceRegistry {
 
 const DEVICE_KEY = 'platform.deviceId';
 
+/** The subset of secure storage a device identifier needs. */
 export interface MinimalSecureStorage {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
 }
 
-/** Stable per-install identifier, created once and kept in secure storage. */
+/**
+ * Stable per-install identifier. Not a secret and not an authentication
+ * factor — it labels an install so a user can recognise and revoke it.
+ */
 export async function getOrCreateDeviceId(storage: MinimalSecureStorage): Promise<string> {
   const existing = await storage.get(DEVICE_KEY);
   if (existing) return existing;

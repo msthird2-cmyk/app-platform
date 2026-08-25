@@ -22,6 +22,20 @@ import { backupError } from '../errors';
 import type { EncryptedExportBundle } from '@platform/data';
 
 /**
+ * A backup identifier reaches a Cloud Storage path, so it is validated as a
+ * path segment before use. Firebase's `ref()` normalises `..`, which would
+ * otherwise let a caller-supplied id escape the owner's prefix.
+ */
+const SAFE_BACKUP_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function assertSafeBackupId(id: string): string {
+  if (!SAFE_BACKUP_ID.test(id)) {
+    throw backupError('BACKUP_NOT_FOUND' satisfies BackupErrorCode);
+  }
+  return id;
+}
+
+/**
  * Only the encrypted payload is uploaded. The Firestore document carries
  * metadata — timestamps and counts — and never any record content.
  */
@@ -50,19 +64,20 @@ export class FirebaseBackupService implements BackupService {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  async upload(bundle: EncryptedExportBundle, summary: Omit<BackupSummary, 'id'>): Promise<BackupSummary> {
+  async upload(bundle: EncryptedExportBundle, summary: BackupSummary): Promise<BackupSummary> {
     const userId = this.requireUserId();
-    const id = `backup-${summary.createdAt}`;
+    const id = assertSafeBackupId(summary.id);
     try {
+      // The storage rules reject a write to an existing object, so a collision
+      // fails loudly here rather than silently replacing an earlier backup.
       await uploadString(
         ref(this.storage, `users/${userId}/backups/${id}.json`),
         JSON.stringify(bundle),
         'raw',
         { contentType: 'application/json' },
       );
-      const stored: BackupSummary = { ...summary, id };
-      await setDoc(doc(this.db, `users/${userId}/backups`, id), stored);
-      return stored;
+      await setDoc(doc(this.db, `users/${userId}/backups`, id), summary);
+      return summary;
     } catch (cause) {
       throw backupError('BACKUP_FAILED' satisfies BackupErrorCode, cause);
     }
@@ -70,8 +85,9 @@ export class FirebaseBackupService implements BackupService {
 
   async download(id: string): Promise<EncryptedExportBundle> {
     const userId = this.requireUserId();
+    const safeId = assertSafeBackupId(id);
     try {
-      const bytes = await getBytes(ref(this.storage, `users/${userId}/backups/${id}.json`));
+      const bytes = await getBytes(ref(this.storage, `users/${userId}/backups/${safeId}.json`));
       return JSON.parse(new TextDecoder().decode(bytes)) as EncryptedExportBundle;
     } catch (cause) {
       throw backupError('BACKUP_NOT_FOUND' satisfies BackupErrorCode, cause);
@@ -80,9 +96,10 @@ export class FirebaseBackupService implements BackupService {
 
   async remove(id: string): Promise<void> {
     const userId = this.requireUserId();
+    const safeId = assertSafeBackupId(id);
     try {
-      await deleteObject(ref(this.storage, `users/${userId}/backups/${id}.json`));
-      await deleteDoc(doc(this.db, `users/${userId}/backups`, id));
+      await deleteObject(ref(this.storage, `users/${userId}/backups/${safeId}.json`));
+      await deleteDoc(doc(this.db, `users/${userId}/backups`, safeId));
     } catch (cause) {
       throw backupError('BACKUP_FAILED' satisfies BackupErrorCode, cause);
     }

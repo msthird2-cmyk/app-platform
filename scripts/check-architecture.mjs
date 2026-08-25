@@ -78,6 +78,69 @@ for (const file of sources.filter((f) => relative(ROOT, f).startsWith('packages/
   }
 }
 
+// The React Native crypto path must not depend on a browser global.
+//
+// `PortableCryptoService` exists because Hermes provides none of these — not
+// `crypto.subtle`, not `crypto.getRandomValues`, not `btoa`/`atob`, and not
+// `TextEncoder`/`TextDecoder` (verified against the installed `react-native`
+// and `@react-native/js-polyfills`, neither of which defines any). Reaching for
+// one would not fail here or in CI; it would fail on a user's phone, at the
+// moment they try to restore a backup.
+//
+// The set of files checked is computed by following imports out from
+// `PortableCryptoService`, not hard-coded, so pulling in a module that uses a
+// global is caught even though that module was never listed.
+const PORTABLE_ENTRY = join(ROOT, 'packages/security/src/services/PortableCryptoService.ts');
+const BROWSER_GLOBALS = [
+  { pattern: /\bcrypto\s*\.\s*subtle\b/, name: 'crypto.subtle' },
+  { pattern: /\bcrypto\s*\.\s*getRandomValues\b/, name: 'crypto.getRandomValues' },
+  { pattern: /\bbtoa\s*\(/, name: 'btoa' },
+  { pattern: /\batob\s*\(/, name: 'atob' },
+  { pattern: /\bnew\s+TextEncoder\b/, name: 'TextEncoder' },
+  { pattern: /\bnew\s+TextDecoder\b/, name: 'TextDecoder' },
+];
+
+/** Strips comments, so the prose explaining why a global is banned is not itself a hit. */
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+function portableSurface(entry, seen = new Set()) {
+  if (seen.has(entry) || !existsSync(entry)) return seen;
+  seen.add(entry);
+  // Comments are stripped first so a specifier quoted in prose is not followed,
+  // and every `from '...'` is matched regardless of how the clause is wrapped —
+  // an earlier version anchored on the line start and silently skipped every
+  // multi-line import, which is most of them.
+  const text = stripComments(readFileSync(entry, 'utf8'));
+  for (const [, spec] of text.matchAll(/from\s*['"](\.[^'"]*)['"]/g)) {
+    const base = join(entry, '..', spec.replace(/\.js$/, ''));
+    for (const candidate of [`${base}.ts`, join(base, 'index.ts')]) {
+      if (existsSync(candidate)) {
+        portableSurface(candidate, seen);
+        break;
+      }
+    }
+  }
+  return seen;
+}
+
+if (!existsSync(PORTABLE_ENTRY)) {
+  failures.push('packages/security/src/services/PortableCryptoService.ts is missing — the React Native crypto guard cannot run.');
+} else {
+  for (const file of portableSurface(PORTABLE_ENTRY)) {
+    const code = stripComments(readFileSync(file, 'utf8'));
+    for (const { pattern, name } of BROWSER_GLOBALS) {
+      if (pattern.test(code)) {
+        failures.push(
+          `${relative(ROOT, file)} uses ${name}, which React Native does not provide. ` +
+            'It is on the PortableCryptoService import path — inject the capability instead.',
+        );
+      }
+    }
+  }
+}
+
 // Every shared package has a public API and a README.
 for (const pkg of readdirSync(join(ROOT, 'packages'))) {
   for (const required of ['src/index.ts', 'README.md', 'package.json']) {

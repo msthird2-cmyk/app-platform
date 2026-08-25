@@ -13,6 +13,10 @@ export const AuthErrorCode = {
   DEVICE_VERIFICATION_FAILED: 'DEVICE_VERIFICATION_FAILED',
   NETWORK_ERROR: 'NETWORK_ERROR',
   SIGN_OUT_FAILED: 'SIGN_OUT_FAILED',
+  EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
+  EMAIL_VERIFICATION_FAILED: 'EMAIL_VERIFICATION_FAILED',
+  /** Device verification cannot be performed safely without a trusted server. */
+  DEVICE_VERIFICATION_UNAVAILABLE: 'DEVICE_VERIFICATION_UNAVAILABLE',
 } as const;
 
 export type AuthErrorCode = (typeof AuthErrorCode)[keyof typeof AuthErrorCode];

@@ -7,13 +7,29 @@ function record(overrides: Partial<SyncableRecord> = {}): SyncableRecord {
 }
 
 describe('resolveConflict', () => {
-  it('prefers the higher revision', () => {
+  // `updatedAt` is written by the server and cannot be forged; `revision` is
+  // authored on the device. Comparing the revision first would let one device
+  // claim a huge number and win every future conflict, so the unforgeable
+  // field is compared first and the revision only breaks ties.
+  it('prefers the later server timestamp over a higher client revision', () => {
     const local = record({ revision: 3, updatedAt: 500 });
     const remote = record({ revision: 2, updatedAt: 9000 });
-    expect(resolveConflict(local, remote)).toEqual({ outcome: 'local', record: local });
+    expect(resolveConflict(local, remote)).toEqual({ outcome: 'remote', record: remote });
   });
 
-  it('falls back to the later timestamp at equal revisions', () => {
+  it('cannot be pinned by an inflated revision', () => {
+    const hostile = record({ revision: 999_999, updatedAt: 1000 });
+    const honest = record({ revision: 2, updatedAt: 2000 });
+    expect(resolveConflict(hostile, honest).outcome).toBe('remote');
+  });
+
+  it('uses the revision only when timestamps are equal', () => {
+    const local = record({ revision: 3, updatedAt: 1000 });
+    const remote = record({ revision: 2, updatedAt: 1000 });
+    expect(resolveConflict(local, remote).outcome).toBe('local');
+  });
+
+  it('prefers the later timestamp at equal revisions', () => {
     const local = record({ updatedAt: 500 });
     const remote = record({ updatedAt: 900 });
     expect(resolveConflict(local, remote).outcome).toBe('remote');

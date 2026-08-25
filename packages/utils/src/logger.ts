@@ -1,43 +1,64 @@
 /**
- * Safe-by-default logging. Sensitive keys are redacted before anything is
- * emitted, so a whole request or response object can never leak a password,
- * token, recovery code or financial record.
+ * Logging that is safe because it does not trust the caller.
+ *
+ * Context is filtered by an **allowlist**: a key that is not explicitly known
+ * to be non-sensitive is redacted, so adding a field to a domain type can never
+ * silently start logging it. Free text in the message is scanned for the
+ * patterns that most often carry identifiers.
+ *
+ * This replaces an earlier denylist that matched key names such as `password`
+ * and `amount` and therefore missed `value`, `outstanding`, `netWorth` and most
+ * other field names the applications actually use.
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-const SENSITIVE_KEY = new RegExp(
-  [
-    'password',
-    'passcode',
-    'pin',
-    'secret',
-    'token',
-    'accesstoken',
-    'refreshtoken',
-    'credential',
-    'authorization',
-    'recoverycode',
-    'recoverycodes',
-    'encryptionkey',
-    'key',
-    'iv',
-    'salt',
-    'ciphertext',
-    'payload',
-    'balance',
-    'amount',
-    'accountnumber',
-    'pan',
-    'email',
-    'phone',
-    'dob',
-  ].join('|'),
-  'i',
-);
+/**
+ * Keys whose values are known to carry no personal, financial or secret data:
+ * counts, durations, enum-like states and the platform's own identifiers.
+ * Everything else is redacted. Keep this list short and justify additions.
+ */
+const LOGGABLE_KEYS: ReadonlySet<string> = new Set([
+  'appName',
+  'attempt',
+  'attempts',
+  'code',
+  'collection',
+  'collections',
+  'count',
+  'domain',
+  'durationMs',
+  'errorName',
+  'level',
+  'ok',
+  'outcome',
+  'phase',
+  'platform',
+  'pulled',
+  'pushed',
+  'reason',
+  'recordCount',
+  'restored',
+  'schemaVersion',
+  'scope',
+  'step',
+  'stepCount',
+  'steps',
+  'unchanged',
+  'version',
+]);
 
 export const REDACTED = '[redacted]';
+
+const EMAIL_PATTERN = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+/** Six or more consecutive digits: account numbers, amounts, identifiers. */
+const LONG_DIGIT_RUN = /\d{6,}/g;
+
+/** Masks the patterns most likely to carry an identifier out of free text. */
+export function redactText(value: string): string {
+  return value.replace(EMAIL_PATTERN, REDACTED).replace(LONG_DIGIT_RUN, REDACTED);
+}
 
 export interface LogSink {
   write(level: LogLevel, message: string, context?: Record<string, unknown>): void;
@@ -58,19 +79,37 @@ const consoleSink: LogSink = {
   },
 };
 
-export function redact(value: unknown, depth = 0): unknown {
-  if (depth > 6) return REDACTED;
+function redactValue(value: unknown, depth: number): unknown {
+  if (depth > 4) return REDACTED;
   if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1));
-  if (value instanceof Error) return { name: value.name, message: value.message };
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SENSITIVE_KEY.test(key) ? REDACTED : redact(item, depth + 1);
-    }
-    return out;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return redactText(value);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, depth + 1));
+  if (value instanceof Error) return { errorName: value.name, code: readCode(value) };
+  if (typeof value === 'object') return redactObject(value as Record<string, unknown>, depth + 1);
+  return REDACTED;
+}
+
+function readCode(error: Error): string {
+  const candidate = (error as unknown as { code?: unknown }).code;
+  return typeof candidate === 'string' ? candidate : 'UNKNOWN_ERROR';
+}
+
+function redactObject(input: Record<string, unknown>, depth: number): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    out[key] = LOGGABLE_KEYS.has(key) ? redactValue(value, depth) : REDACTED;
   }
-  return value;
+  return out;
+}
+
+/**
+ * Redacts a value for logging. Object keys outside {@link LOGGABLE_KEYS} are
+ * replaced wholesale; an `Error` is reduced to its name and code, never its
+ * message, which routinely quotes the input that failed.
+ */
+export function redact(value: unknown): unknown {
+  return redactValue(value, 0);
 }
 
 export interface Logger {
@@ -82,14 +121,16 @@ export interface Logger {
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
-  const level = options.level ?? 'info';
+  // Safe by default: warnings and errors only unless an application opts in.
+  const level = options.level ?? 'warn';
   const sink = options.sink ?? consoleSink;
   const scope = options.scope;
 
   const emit = (at: LogLevel, message: string, context?: Record<string, unknown>): void => {
     if (LEVEL_ORDER[at] < LEVEL_ORDER[level]) return;
-    const prefixed = scope ? `[${scope}] ${message}` : message;
-    sink.write(at, prefixed, context ? (redact(context) as Record<string, unknown>) : undefined);
+    const safeMessage = redactText(message);
+    const prefixed = scope ? `[${scope}] ${safeMessage}` : safeMessage;
+    sink.write(at, prefixed, context ? redactObject(context, 0) : undefined);
   };
 
   return {
@@ -103,4 +144,4 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 }
 
 /** Production-safe default: warnings and errors only, always redacted. */
-export const logger = createLogger({ level: 'warn' });
+export const logger = createLogger();

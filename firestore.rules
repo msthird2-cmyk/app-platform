@@ -1,0 +1,203 @@
+rules_version = '2';
+
+// Deny by default. Nothing is readable or writable unless a rule below grants
+// it, and every grant is anchored to request.auth.uid — never to a value the
+// client supplies. See docs/ARCHITECTURE.md, "The Firebase boundary".
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- identity -------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Ownership always comes from the token, never from the document or path
+    // segment the caller chose.
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Financial writes additionally require a verified address, so an account
+    // registered against someone else's email cannot record data.
+    function isVerified() {
+      // `.get` with a default: a token that omits the claim entirely — a custom
+      // token, or some provider flows — must produce a denial decision rather
+      // than an evaluation error. Same outcome, deterministic instead of
+      // exceptional, and it cannot turn into a surprise inside a larger
+      // boolean expression later.
+      return isSignedIn() && request.auth.token.get('email_verified', false) == true;
+    }
+
+    // ---- reserved fields -------------------------------------------------
+
+    // Ownership, role and entitlement state is decided by the token and by a
+    // trusted server. A client that can write these names into its own
+    // document can later be mistaken for privileged by any code — client,
+    // rule, or future backend — that reads them back, and `resource.data.role`
+    // reads exactly like a claim at the point of use.
+    //
+    // A domain record is deliberately open-ended, so this is a denylist rather
+    // than an allowlist: an application may add any field it likes except one
+    // that could be confused for authorization state. The stronger allowlist
+    // form is already used where the shape is known (`isProfileShape`,
+    // `isBackupSummary`); extending it to records is a schema change, not a
+    // rules change, and waits for the encrypted record envelope.
+    //
+    // `hasAny` matches whole keys, so a legitimate `planName` or
+    // `userIdentifier` is unaffected.
+    function hasNoReservedFields() {
+      return !request.resource.data.keys().hasAny([
+        'ownerId', 'userId', 'uid',
+        'isAdmin', 'admin', 'role', 'roles',
+        'permissions', 'entitlements', 'plan', 'claims',
+        'isVerified', 'emailVerified', 'createdBy'
+      ]);
+    }
+
+    // ---- record collections ---------------------------------------------
+
+    // The collections applications are allowed to store records in. A restore
+    // bundle naming anything else is refused here as well as in the client.
+    function isRecordCollection(name) {
+      return name in [
+        'assets', 'liabilities', 'snapshots',
+        'holdings', 'transactions', 'prices',
+        'expenses', 'budgets', 'rules'
+      ];
+    }
+
+    // updatedAt must be the server's clock, so a device with a skewed or
+    // hostile clock cannot pin a record by claiming a future timestamp.
+    function hasServerTimestamp() {
+      return request.resource.data.updatedAt == request.time;
+    }
+
+    function hasValidIdentity(docId) {
+      return request.resource.data.id is string
+        && request.resource.data.id == docId
+        && request.resource.data.revision is int
+        && request.resource.data.revision > 0;
+    }
+
+    function isCreatingRecord(docId) {
+      return hasValidIdentity(docId)
+        && hasServerTimestamp()
+        && (request.resource.data.deletedAt == null
+            || request.resource.data.deletedAt == request.time);
+    }
+
+    function isUpdatingRecord(docId) {
+      return hasValidIdentity(docId)
+        && hasServerTimestamp()
+        // Revision never moves backwards.
+        && request.resource.data.revision >= resource.data.revision
+        // A tombstone is terminal: it can be hard-deleted but never edited,
+        // so a slower device's stale write cannot resurrect it.
+        && resource.data.deletedAt == null
+        && (request.resource.data.deletedAt == null
+            || request.resource.data.deletedAt == request.time);
+    }
+
+    match /users/{uid}/{collection}/{docId} {
+      allow get, list: if isOwner(uid) && isRecordCollection(collection);
+      allow create: if isOwner(uid) && isVerified()
+                    && isRecordCollection(collection) && isCreatingRecord(docId)
+                    && hasNoReservedFields();
+      allow update: if isOwner(uid) && isVerified()
+                    && isRecordCollection(collection) && isUpdatingRecord(docId)
+                    && hasNoReservedFields();
+      // Hard delete is permitted only so account deletion can remove the
+      // subtree; ordinary removal goes through the tombstone above.
+      allow delete: if isOwner(uid) && isRecordCollection(collection);
+    }
+
+    // ---- profile ---------------------------------------------------------
+
+    // The client may write exactly one field. Any future server-controlled
+    // field (plan, role, entitlements) is therefore unwritable by default
+    // rather than needing to be remembered and denied later.
+    function isProfileShape() {
+      return request.resource.data.keys().hasOnly(['displayName'])
+        && (!('displayName' in request.resource.data)
+            || request.resource.data.displayName is string);
+    }
+
+    match /users/{uid} {
+      allow get: if isOwner(uid);
+      allow list: if false;
+      allow create, update: if isOwner(uid) && isProfileShape();
+      allow delete: if isOwner(uid);
+    }
+
+    // ---- backups ---------------------------------------------------------
+
+    // Metadata only. The ciphertext lives in Cloud Storage; nothing here may
+    // carry record content.
+    function isBackupSummary(backupId) {
+      return backupId.matches('^[A-Za-z0-9_-]{1,64}$')
+        && request.resource.data.keys()
+             .hasOnly(['id', 'createdAt', 'sizeBytes', 'recordCount', 'appName'])
+        && request.resource.data.id == backupId
+        && request.resource.data.createdAt is int
+        && request.resource.data.sizeBytes is int
+        && request.resource.data.recordCount is int
+        && request.resource.data.appName is string;
+    }
+
+    match /users/{uid}/backups/{backupId} {
+      allow get, list: if isOwner(uid);
+      allow create: if isOwner(uid) && isBackupSummary(backupId);
+      // Immutable once written, so a backup cannot be silently replaced.
+      allow update: if false;
+      allow delete: if isOwner(uid);
+    }
+
+    // ---- deletion journal ------------------------------------------------
+
+    // Lets an interrupted account deletion be detected and resumed.
+    match /users/{uid}/deletion/{docId} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // ---- secondary records -----------------------------------------------
+
+    // `write` is split into create/update/delete deliberately: on a delete
+    // `request.resource` is null, so a field check written against a combined
+    // `write` grant would fail to evaluate rather than pass.
+    match /users/{uid}/devices/{deviceId} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && hasNoReservedFields();
+      allow delete: if isOwner(uid);
+    }
+
+    match /users/{uid}/settings/{docId} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && hasNoReservedFields();
+      allow delete: if isOwner(uid);
+    }
+
+    // ---- client-inaccessible -------------------------------------------
+
+    // A verification code is a secret the client must not be able to read, and
+    // a verification verdict is a decision the client must not be able to
+    // make. Neither is possible without a trusted server, so the path is
+    // closed to clients entirely.
+    match /users/{uid}/deviceVerifications/{docId} {
+      allow read, write: if false;
+    }
+
+    // Recovery-code hashes are an account-takeover credential. Client-side
+    // comparison would mean handing the client the list to compare against,
+    // so this path is closed until a trusted server can own the check.
+    match /users/{uid}/recoveryCodes/{docId} {
+      allow read, write: if false;
+    }
+
+    // ---- default deny ----------------------------------------------------
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

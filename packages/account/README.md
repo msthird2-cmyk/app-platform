@@ -57,8 +57,10 @@ Every string is a prop. `requireConfirmation` and `confirmationPhrase` gate the 
 The deletion order is deliberate and covered by a regression test:
 
 ```
-confirm → reauthenticate → user data → backups → secondary records → account → clear local state → signed out
+confirm → reauthenticate → journal → user data → backups → secondary records → account → clear local state → signed out
 ```
+
+Re-authentication now defaults to **on**. Firebase refuses `deleteUser` without a recent login, so leaving it optional meant the common path destroyed every record and then failed at the final step. The journal is written before anything is destroyed, so an interrupted deletion is detectable through `hasPendingDeletion()` and can be resumed.
 
 Deleting the authentication account earlier would orphan encrypted data that can no longer be authenticated for removal. Re-authentication is injected as a callback so this package does not depend on `@platform/auth`.
 

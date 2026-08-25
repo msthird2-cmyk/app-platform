@@ -10,11 +10,17 @@ import {
 } from '../src/session';
 import { InMemorySecureStorage } from '../src/services/InMemorySecureStorage';
 import { SecurityErrorCode } from '../src/errors';
+import type { SecureStorage } from '../src/types/storage';
 
 const NOW = 1_700_000_000_000;
 
 function session(expiresAt: number): SessionState {
   return { userId: 'user-1', tokens: { accessToken: 'a', refreshToken: 'r', expiresAt } };
+}
+
+/** Stands in for a Keychain or Android Keystore implementation. */
+class KeystoreBackedStorage extends InMemorySecureStorage implements SecureStorage {
+  override readonly isHardwareBacked = true;
 }
 
 describe('session lifetime', () => {
@@ -42,8 +48,15 @@ describe('session lifetime', () => {
 });
 
 describe('session store', () => {
-  it('round-trips through secure storage', async () => {
-    const store = createSessionStore(new InMemorySecureStorage());
+  it('refuses storage that cannot protect a token', () => {
+    // AsyncStorage and localStorage land here: plaintext on disk.
+    expect(() => createSessionStore(new InMemorySecureStorage())).toThrowError(
+      expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
+    );
+  });
+
+  it('round-trips through hardware-backed storage', async () => {
+    const store = createSessionStore(new KeystoreBackedStorage());
     await store.save(session(NOW + 1000));
     await expect(store.load()).resolves.toMatchObject({ userId: 'user-1' });
     await store.clear();
@@ -51,7 +64,7 @@ describe('session store', () => {
   });
 
   it('discards a corrupt entry instead of throwing', async () => {
-    const storage = new InMemorySecureStorage();
+    const storage = new KeystoreBackedStorage();
     await storage.set('platform.session', 'not json');
     const store = createSessionStore(storage);
     await expect(store.load()).resolves.toBeNull();

@@ -7,7 +7,11 @@ import type { UserProfile } from '../src/types/account';
 const PROFILE: UserProfile = { id: 'u1', email: 'you@example.com', displayName: 'You', createdAt: 0 };
 
 function callbacks() {
-  return { clearLocalState: async () => undefined, onSignedOut: () => undefined };
+  return {
+    reauthenticate: async () => undefined,
+    clearLocalState: async () => undefined,
+    onSignedOut: () => undefined,
+  };
 }
 
 describe('deleteAccountFlow against a working service', () => {
@@ -20,7 +24,7 @@ describe('deleteAccountFlow against a working service', () => {
     await deleteAccountFlow(service, callbacks(), { confirmed: true });
 
     expect(service.remaining).toEqual({ collections: 0, backups: 0, secondary: 0, account: false });
-    expect(service.calls).toEqual([
+    expect(service.destructiveCalls).toEqual([
       'deleteUserData',
       'deleteBackups',
       'deleteSecondaryRecords',
@@ -54,7 +58,7 @@ describe('deleteAccountFlow against a working service', () => {
       code: AccountErrorCode.DATA_DELETION_FAILED,
     });
     expect(service.remaining).toMatchObject({ collections: 1, account: true });
-    expect(service.calls).toEqual(['deleteUserData']);
+    expect(service.destructiveCalls).toEqual(['deleteUserData']);
   });
 
   it('exports the profile alongside the records', async () => {

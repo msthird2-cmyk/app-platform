@@ -1,47 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { WebCryptoService } from '../src/services/WebCryptoService';
 import { SecurityErrorCode } from '../src/errors';
+import { MIN_KDF_ITERATIONS } from '../src/kdfPolicy';
+import { describeCryptoContract, CONTEXT } from './cryptoContract';
 
-// A low iteration count keeps the suite fast; production uses the default.
-const crypto = new WebCryptoService(1000);
+/**
+ * Every case that used to live here in longhand is now in
+ * `cryptoContract.ts`, so it runs against `PortableCryptoService` too — the two
+ * implementations have to behave identically or a backup taken on one device
+ * cannot be restored on another. What stays here is specific to this one.
+ *
+ * The minimum cost keeps the suite fast; production uses the default.
+ */
+describeCryptoContract('WebCryptoService', () => new WebCryptoService(MIN_KDF_ITERATIONS));
 
-describe('WebCryptoService', () => {
-  it('round-trips a payload', async () => {
-    const payload = await crypto.encrypt('net worth: 1234', 'correct horse battery');
-    await expect(crypto.decrypt(payload, 'correct horse battery')).resolves.toBe('net worth: 1234');
+describe('WebCryptoService — configuration', () => {
+  it('defaults to the policy default rather than a locally chosen number', async () => {
+    const payload = await new WebCryptoService().encrypt('secret', 'passphrase', CONTEXT);
+    expect(payload.iterations).toBe(210_000);
   });
 
-  it('never stores the plaintext in the payload', async () => {
-    const payload = await crypto.encrypt('secret-value', 'passphrase');
-    expect(JSON.stringify(payload)).not.toContain('secret-value');
+  it('carries the configured cost into the payload and the stored hash', async () => {
+    const crypto = new WebCryptoService(123_456);
+    expect((await crypto.encrypt('secret', 'passphrase', CONTEXT)).iterations).toBe(123_456);
+    expect((await crypto.hashSecret('secret')).iterations).toBe(123_456);
   });
 
-  it('produces a different ciphertext each time', async () => {
-    const first = await crypto.encrypt('same', 'passphrase');
-    const second = await crypto.encrypt('same', 'passphrase');
-    expect(first.ciphertext).not.toBe(second.ciphertext);
-    expect(first.iv).not.toBe(second.iv);
-    expect(first.salt).not.toBe(second.salt);
-  });
-
-  it('fails with a typed code on the wrong passphrase', async () => {
-    const payload = await crypto.encrypt('secret', 'right');
-    await expect(crypto.decrypt(payload, 'wrong')).rejects.toMatchObject({
-      code: SecurityErrorCode.DECRYPTION_FAILED,
-      domain: 'security',
-    });
-  });
-
-  it('rejects a tampered ciphertext', async () => {
-    const payload = await crypto.encrypt('secret', 'passphrase');
-    const tampered = { ...payload, ciphertext: `${payload.ciphertext.slice(0, -4)}AAAA` };
-    await expect(crypto.decrypt(tampered, 'passphrase')).rejects.toMatchObject({
-      code: SecurityErrorCode.DECRYPTION_FAILED,
-    });
-  });
-
-  it('hashes deterministically', async () => {
-    expect(await crypto.hash('value')).toBe(await crypto.hash('value'));
-    expect(await crypto.hash('value')).not.toBe(await crypto.hash('other'));
+  it('rejects a cost the read path would refuse', () => {
+    for (const iterations of [0, 1, 99_999, 1_000_001, 1.5, Number.NaN]) {
+      expect(() => new WebCryptoService(iterations), String(iterations)).toThrowError(
+        expect.objectContaining({ code: SecurityErrorCode.ENCRYPTION_PARAMETERS_INVALID }),
+      );
+    }
   });
 });

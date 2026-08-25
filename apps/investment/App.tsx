@@ -1,7 +1,8 @@
 import { AppCore } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { InMemoryRepository } from '@platform/data';
-import { InMemorySecureStorage, WebCryptoService } from '@platform/security';
+import { getRandomBytes } from 'expo-crypto';
+import { InMemorySecureStorage, createCryptoService } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
@@ -26,7 +27,7 @@ export default function App({ authService, accountService, backupService }: Inve
       accountService={accountService}
       backupService={backupService}
       repository={new InMemoryRepository()}
-      cryptoService={new WebCryptoService()}
+      cryptoService={createCryptoService({ randomBytes: getRandomBytes })}
       secureStorage={new InMemorySecureStorage()}
       signedOut={
         <LoginScreen

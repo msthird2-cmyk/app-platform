@@ -1,15 +1,33 @@
 import { SecurityError, SecurityErrorCode } from './errors';
-import type { CryptoService } from './types/crypto';
+import type { CryptoService, SecretHash } from './types/crypto';
 
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1
+/** 32 symbols, ambiguous characters removed. 256 is a multiple of 32, so
+ *  taking a random byte modulo the alphabet length introduces no bias. */
+const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const GROUP = 4;
 const GROUPS = 3;
+
+/** 12 symbols x log2(32) = 60 bits. */
+export const RECOVERY_CODE_ENTROPY_BITS = GROUP * GROUPS * 5;
+
+export const DEFAULT_RECOVERY_CODE_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * A stored recovery code. The plaintext exists only in the moment it is shown
+ * to the user; what is persisted is a salted, iterated hash plus the state
+ * needed to enforce single use and expiry.
+ */
+export interface RecoveryCodeRecord {
+  hash: SecretHash;
+  createdAt: number;
+  expiresAt: number;
+  usedAt: number | null;
+}
 
 function randomChar(): string {
   const bytes = new Uint8Array(1);
   globalThis.crypto.getRandomValues(bytes);
-  const index = (bytes[0] ?? 0) % ALPHABET.length;
-  return ALPHABET[index] ?? ALPHABET[0]!;
+  return ALPHABET[(bytes[0] ?? 0) % ALPHABET.length] ?? ALPHABET[0]!;
 }
 
 /** One code, e.g. `K7QM-2XPD-9RTF`. Shown once, never persisted in plaintext. */
@@ -39,26 +57,85 @@ export function normalizeRecoveryCode(input: string): string {
   return (stripped.match(/.{1,4}/g) ?? []).join('-');
 }
 
-export async function hashRecoveryCodes(codes: readonly string[], crypto: CryptoService): Promise<string[]> {
-  return Promise.all(codes.map((code) => crypto.hash(normalizeRecoveryCode(code))));
+export interface HashRecoveryCodesOptions {
+  now: number;
+  lifetimeMs?: number;
 }
 
 /**
- * Verifies a code against stored hashes and reports which hash was consumed,
- * so the caller can invalidate it. A recovery code is single use.
+ * Turns freshly generated codes into records for storage. Uses the slow,
+ * salted `hashSecret` rather than a bare digest: a 60-bit secret behind a
+ * single unsalted SHA-256 is within reach of offline attack, and an unsalted
+ * digest lets one precomputation attack every user at once.
+ */
+export async function hashRecoveryCodes(
+  codes: readonly string[],
+  crypto: CryptoService,
+  options: HashRecoveryCodesOptions,
+): Promise<RecoveryCodeRecord[]> {
+  const lifetimeMs = options.lifetimeMs ?? DEFAULT_RECOVERY_CODE_LIFETIME_MS;
+  return Promise.all(
+    codes.map(async (code) => ({
+      hash: await crypto.hashSecret(normalizeRecoveryCode(code)),
+      createdAt: options.now,
+      expiresAt: options.now + lifetimeMs,
+      usedAt: null,
+    })),
+  );
+}
+
+export interface VerifyRecoveryCodeResult {
+  valid: boolean;
+  /** The records as they should now be persisted, with the match consumed. */
+  records: RecoveryCodeRecord[];
+  reason?: 'INVALID' | 'EXPIRED' | 'ALREADY_USED';
+}
+
+/**
+ * Verifies a code and consumes it. Every candidate is checked even after a
+ * match so the work does not depend on the code's position, and a code that is
+ * expired or already used is reported without being re-consumable.
  */
 export async function verifyRecoveryCode(
   input: string,
-  hashes: readonly string[],
+  records: readonly RecoveryCodeRecord[],
   crypto: CryptoService,
-): Promise<{ valid: boolean; remaining: string[] }> {
+  now: number,
+): Promise<VerifyRecoveryCodeResult> {
   let candidate: string;
   try {
-    candidate = await crypto.hash(normalizeRecoveryCode(input));
+    candidate = normalizeRecoveryCode(input);
   } catch {
-    return { valid: false, remaining: [...hashes] };
+    return { valid: false, records: [...records], reason: 'INVALID' };
   }
-  const index = hashes.indexOf(candidate);
-  if (index === -1) return { valid: false, remaining: [...hashes] };
-  return { valid: true, remaining: hashes.filter((_, i) => i !== index) };
+
+  let matched = -1;
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!;
+    if (await crypto.verifySecret(candidate, record.hash)) {
+      if (matched === -1) matched = index;
+    }
+  }
+
+  if (matched === -1) return { valid: false, records: [...records], reason: 'INVALID' };
+
+  const record = records[matched]!;
+  if (record.usedAt !== null) {
+    return { valid: false, records: [...records], reason: 'ALREADY_USED' };
+  }
+  if (record.expiresAt <= now) {
+    return { valid: false, records: [...records], reason: 'EXPIRED' };
+  }
+
+  const consumed = records.map((entry, index) =>
+    index === matched ? { ...entry, usedAt: now } : entry,
+  );
+  return { valid: true, records: consumed };
+}
+
+export function remainingRecoveryCodes(
+  records: readonly RecoveryCodeRecord[],
+  now: number,
+): number {
+  return records.filter((record) => record.usedAt === null && record.expiresAt > now).length;
 }

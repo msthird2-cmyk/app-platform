@@ -1,5 +1,5 @@
 import { createLogger } from '@platform/utils';
-import type { CryptoService, EncryptedPayload } from '@platform/security';
+import type { CryptoService, EncryptedPayload, EncryptionContext } from '@platform/security';
 import { DataError, DataErrorCode } from './errors';
 import { assertSyncableRecord } from './validation';
 import type { SyncableRecord } from './types/record';
@@ -7,6 +7,8 @@ import type { SyncableRecord } from './types/record';
 const log = createLogger({ scope: 'data:export' });
 
 export const EXPORT_SCHEMA_VERSION = 1;
+
+const RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 export interface ExportBundle {
   schemaVersion: number;
@@ -35,9 +37,10 @@ export async function encryptExportBundle(
   bundle: ExportBundle,
   passphrase: string,
   crypto: CryptoService,
+  context: EncryptionContext,
 ): Promise<EncryptedExportBundle> {
   try {
-    const payload = await crypto.encrypt(JSON.stringify(bundle), passphrase);
+    const payload = await crypto.encrypt(JSON.stringify(bundle), passphrase, context);
     log.info('export encrypted', {
       appName: bundle.appName,
       collections: Object.keys(bundle.collections).length,
@@ -67,8 +70,11 @@ export function parseExportBundle(raw: unknown): ExportBundle {
     throw new DataError(DataErrorCode.IMPORT_INVALID);
   }
 
-  const collections: Record<string, SyncableRecord[]> = {};
+  // A null-prototype accumulator: a `__proto__` collection name would
+  // otherwise replace this object's prototype instead of becoming a key.
+  const collections: Record<string, SyncableRecord[]> = Object.create(null);
   for (const [name, records] of Object.entries(bundle.collections)) {
+    if (RESERVED_KEYS.has(name)) throw new DataError(DataErrorCode.IMPORT_INVALID);
     if (!Array.isArray(records)) throw new DataError(DataErrorCode.IMPORT_INVALID);
     collections[name] = records.map((record) => assertSyncableRecord(record));
   }
@@ -85,8 +91,11 @@ export async function decryptExportBundle(
   encrypted: EncryptedExportBundle,
   passphrase: string,
   crypto: CryptoService,
+  context: EncryptionContext,
 ): Promise<ExportBundle> {
-  const plaintext = await crypto.decrypt(encrypted.payload, passphrase);
+  // The context is authenticated data: a bundle belonging to another user or
+  // another application fails the integrity check rather than decrypting.
+  const plaintext = await crypto.decrypt(encrypted.payload, passphrase, context);
   let parsed: unknown;
   try {
     parsed = JSON.parse(plaintext);

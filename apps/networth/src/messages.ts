@@ -20,6 +20,13 @@ const MESSAGES: Record<string, string> = {
   BACKUP_FAILED: 'The backup did not finish.',
   RESTORE_FAILED: 'The restore did not finish. Your data is unchanged.',
   PASSPHRASE_REQUIRED: 'Enter your backup passphrase.',
+  PASSPHRASE_TOO_WEAK:
+    'Choose a longer backup passphrase — at least 12 characters, mixing letters and numbers.',
+  EMAIL_NOT_VERIFIED: 'Confirm your email address before adding records.',
+  EMAIL_VERIFICATION_FAILED: 'We could not send the confirmation email. Try again.',
+  DEVICE_VERIFICATION_UNAVAILABLE: 'Device verification is not available in this version.',
+  SECURE_STORAGE_UNAVAILABLE: 'This device cannot store your session securely.',
+  BACKUP_CORRUPT: 'That backup does not belong to this app or account.',
   UNKNOWN_ERROR: 'Something went wrong. Try again.',
 };
 

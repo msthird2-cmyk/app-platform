@@ -34,8 +34,13 @@ Each package documents itself in its own `README.md`.
 
 ```bash
 pnpm install
-pnpm turbo build test lint
+pnpm turbo build test lint     # types, unit tests, boundaries
+pnpm test:rules                # Security Rules, against the Firebase emulators
+pnpm verify                    # both
 ```
+
+The rules suite needs Java (for the Firestore emulator); `firebase-tools`
+downloads the emulator jars on first run.
 
 Run one application. Each app's entry point injects the in-memory services, so
 it runs with no backend and no credentials:
@@ -105,6 +110,8 @@ The architecture is checked, not just documented.
 | No deep imports into a package's internals | ESLint `no-restricted-imports` |
 | Nothing in `packages/` imports from `apps/` | `scripts/check-architecture.mjs` |
 | Every shared package has a public API and a README | `scripts/check-architecture.mjs` |
+| Ownership, document shape and immutability in Firestore | `firestore.rules`, tested by `pnpm test:rules` |
+| Backup ownership, filename safety and size in Storage | `storage.rules`, tested by `pnpm test:rules` |
 
 If a change appears to require editing the boundary configuration, stop and
 explain the architectural conflict — do not widen the rule to make code compile.

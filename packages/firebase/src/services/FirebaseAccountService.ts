@@ -15,6 +15,19 @@ import type { FirebaseApp } from 'firebase/app';
 import type { AccountService, UserProfile, AccountErrorCode } from '@platform/account';
 import { accountError } from '../errors';
 
+/**
+ * Subcollections the platform owns beyond an application's record collections.
+ * Firestore does not cascade, so anything omitted here survives deletion and —
+ * once the auth account is gone — can never be reached again.
+ */
+const SECONDARY_COLLECTIONS = ['devices', 'settings'] as const;
+
+const DELETION_JOURNAL = 'deletion';
+const DELETION_JOURNAL_DOC = 'status';
+
+/** The single field a client is permitted to write to its own profile. */
+const CLIENT_WRITABLE_PROFILE_FIELDS = ['displayName'] as const;
+
 export class FirebaseAccountService implements AccountService {
   private readonly auth: Auth;
   private readonly db: Firestore;
@@ -50,11 +63,56 @@ export class FirebaseAccountService implements AccountService {
 
   async updateProfile(changes: { displayName?: string }): Promise<UserProfile> {
     const userId = this.requireUserId();
+    // Only known fields are forwarded. The rules enforce the same allowlist,
+    // so a future server-controlled field cannot be set from here even if a
+    // caller passes one.
+    const permitted: Record<string, unknown> = {};
+    for (const field of CLIENT_WRITABLE_PROFILE_FIELDS) {
+      if (changes[field] !== undefined) permitted[field] = changes[field];
+    }
     try {
-      await setDoc(doc(this.db, 'users', userId), changes, { merge: true });
+      await setDoc(doc(this.db, 'users', userId), permitted, { merge: true });
       return await this.getProfile();
     } catch (cause) {
       throw accountError('PROFILE_UPDATE_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  async beginDeletion(): Promise<void> {
+    const userId = this.requireUserId();
+    try {
+      await setDoc(doc(this.db, `users/${userId}/${DELETION_JOURNAL}`, DELETION_JOURNAL_DOC), {
+        startedAt: Date.now(),
+      });
+    } catch (cause) {
+      throw accountError('DATA_DELETION_FAILED' satisfies AccountErrorCode, cause);
+    }
+  }
+
+  async hasPendingDeletion(): Promise<boolean> {
+    const userId = this.requireUserId();
+    const snapshot = await getDoc(
+      doc(this.db, `users/${userId}/${DELETION_JOURNAL}`, DELETION_JOURNAL_DOC),
+    );
+    return snapshot.exists();
+  }
+
+  /** Deletes every document in a collection, in batches Firestore accepts. */
+  private async purgeCollection(path: string): Promise<void> {
+    const snapshot = await getDocs(firestoreCollection(this.db, path));
+    for (let index = 0; index < snapshot.docs.length; index += 400) {
+      const batch = writeBatch(this.db);
+      for (const document of snapshot.docs.slice(index, index + 400)) batch.delete(document.ref);
+      await batch.commit();
+    }
+  }
+
+  /** Storage listings are one level deep, so nested prefixes need recursion. */
+  private async purgeStoragePrefix(path: string): Promise<void> {
+    const listing = await listAll(ref(this.storage, path));
+    await Promise.all(listing.items.map((item) => deleteObject(item)));
+    for (const prefix of listing.prefixes) {
+      await this.purgeStoragePrefix(prefix.fullPath);
     }
   }
 
@@ -63,12 +121,7 @@ export class FirebaseAccountService implements AccountService {
     const userId = this.requireUserId();
     try {
       for (const collection of this.collections) {
-        const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/${collection}`));
-        for (let index = 0; index < snapshot.docs.length; index += 400) {
-          const batch = writeBatch(this.db);
-          for (const document of snapshot.docs.slice(index, index + 400)) batch.delete(document.ref);
-          await batch.commit();
-        }
+        await this.purgeCollection(`users/${userId}/${collection}`);
       }
     } catch (cause) {
       throw accountError('DATA_DELETION_FAILED' satisfies AccountErrorCode, cause);
@@ -79,10 +132,8 @@ export class FirebaseAccountService implements AccountService {
   async deleteBackups(): Promise<void> {
     const userId = this.requireUserId();
     try {
-      const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/backups`));
-      for (const document of snapshot.docs) await deleteDoc(document.ref);
-      const stored = await listAll(ref(this.storage, `users/${userId}/backups`));
-      await Promise.all(stored.items.map((item) => deleteObject(item)));
+      await this.purgeCollection(`users/${userId}/backups`);
+      await this.purgeStoragePrefix(`users/${userId}/backups`);
     } catch (cause) {
       throw accountError('BACKUP_DELETION_FAILED' satisfies AccountErrorCode, cause);
     }
@@ -92,11 +143,13 @@ export class FirebaseAccountService implements AccountService {
   async deleteSecondaryRecords(): Promise<void> {
     const userId = this.requireUserId();
     try {
-      for (const collection of ['devices', 'deviceVerifications', 'settings']) {
-        const snapshot = await getDocs(firestoreCollection(this.db, `users/${userId}/${collection}`));
-        for (const document of snapshot.docs) await deleteDoc(document.ref);
+      for (const collection of SECONDARY_COLLECTIONS) {
+        await this.purgeCollection(`users/${userId}/${collection}`);
       }
       await deleteDoc(doc(this.db, 'users', userId));
+      // The journal goes last: until it is gone, an interrupted deletion is
+      // still detectable and can be resumed.
+      await this.purgeCollection(`users/${userId}/${DELETION_JOURNAL}`);
     } catch (cause) {
       throw accountError('DATA_DELETION_FAILED' satisfies AccountErrorCode, cause);
     }

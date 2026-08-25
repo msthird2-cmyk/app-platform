@@ -12,6 +12,14 @@ export interface UserProfile {
 export interface AccountService {
   getProfile(): Promise<UserProfile>;
   updateProfile(changes: { displayName?: string }): Promise<UserProfile>;
+  /**
+   * Records that a deletion has begun, before anything is destroyed. If the
+   * client dies part-way through, the next signed-in session can detect the
+   * incomplete deletion and finish it rather than leaving data stranded.
+   */
+  beginDeletion(): Promise<void>;
+  /** True when a previous deletion started and did not finish. */
+  hasPendingDeletion(): Promise<boolean>;
   /** Step 3 — encrypted user data. */
   deleteUserData(): Promise<void>;
   /** Step 4 — backups and file storage. */
@@ -35,6 +43,7 @@ export interface DeletionCallbacks {
 
 export type DeletionStep =
   | 'confirm'
+  | 'journal'
   | 'reauthenticate'
   | 'delete-user-data'
   | 'delete-backups'
@@ -46,6 +55,7 @@ export type DeletionStep =
 export const DELETION_STEPS: readonly DeletionStep[] = [
   'confirm',
   'reauthenticate',
+  'journal',
   'delete-user-data',
   'delete-backups',
   'delete-secondary-records',

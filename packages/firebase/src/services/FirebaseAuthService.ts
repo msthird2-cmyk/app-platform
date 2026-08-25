@@ -7,11 +7,11 @@ import {
   signOut,
   updateProfile,
   reauthenticateWithCredential,
+  sendEmailVerification,
   EmailAuthProvider,
   type Auth,
   type User,
 } from 'firebase/auth';
-import { doc, getDoc, getFirestore, setDoc, type Firestore } from 'firebase/firestore';
 import type { FirebaseApp } from 'firebase/app';
 import type { AuthService, AuthUser, Credentials, AuthErrorCode } from '@platform/auth';
 import { authError, type ServiceError } from '../errors';
@@ -43,11 +43,9 @@ function toAuthError(cause: unknown): ServiceError {
 
 export class FirebaseAuthService implements AuthService {
   private readonly auth: Auth;
-  private readonly db: Firestore;
 
   constructor(app: FirebaseApp) {
     this.auth = getAuth(app);
-    this.db = getFirestore(app);
   }
 
   async getCurrentUser(): Promise<AuthUser | null> {
@@ -68,6 +66,10 @@ export class FirebaseAuthService implements AuthService {
     try {
       const credential = await createUserWithEmailAndPassword(this.auth, email, password);
       if (displayName) await updateProfile(credential.user, { displayName });
+      // Financial writes are gated on a verified address in the security
+      // rules, so verification is sent as part of signing up rather than
+      // being left to a screen the user might never reach.
+      await sendEmailVerification(credential.user);
       return toAuthUser(credential.user);
     } catch (cause) {
       throw toAuthError(cause);
@@ -100,29 +102,35 @@ export class FirebaseAuthService implements AuthService {
     }
   }
 
-  async sendDeviceVerification(deviceId: string): Promise<void> {
+  async resendEmailVerification(): Promise<void> {
     const user = this.auth.currentUser;
     if (!user) throw authError('USER_NOT_FOUND' satisfies AuthErrorCode);
     try {
-      await setDoc(doc(this.db, 'users', user.uid, 'deviceVerifications', deviceId), {
-        requestedAt: Date.now(),
-        status: 'pending',
-      });
+      await sendEmailVerification(user);
     } catch (cause) {
-      throw authError('DEVICE_VERIFICATION_FAILED' satisfies AuthErrorCode, cause);
+      throw authError('EMAIL_VERIFICATION_FAILED' satisfies AuthErrorCode, cause);
     }
   }
 
-  async confirmDeviceVerification(deviceId: string, code: string): Promise<void> {
-    const user = this.auth.currentUser;
-    if (!user) throw authError('USER_NOT_FOUND' satisfies AuthErrorCode);
-    const reference = doc(this.db, 'users', user.uid, 'deviceVerifications', deviceId);
-    const snapshot = await getDoc(reference);
-    const expected = snapshot.data()?.code;
-    if (!snapshot.exists() || typeof expected !== 'string' || expected !== code) {
-      throw authError('DEVICE_VERIFICATION_FAILED' satisfies AuthErrorCode);
-    }
-    await setDoc(reference, { status: 'verified', verifiedAt: Date.now() }, { merge: true });
+  /**
+   * Fails closed, deliberately.
+   *
+   * The previous implementation wrote a pending document, then had the client
+   * read the expected code out of Firestore, compare it locally, and write
+   * `status: 'verified'` itself. A client that can read the secret it is being
+   * challenged with — and can write the verdict — is not a second factor. The
+   * code path is removed rather than left in place, and the Firestore rules
+   * close the collection to clients entirely.
+   *
+   * Restoring this feature requires a trusted server to issue the code and
+   * decide the outcome, which the Spark plan does not provide.
+   */
+  async sendDeviceVerification(_deviceId: string): Promise<void> {
+    throw authError('DEVICE_VERIFICATION_UNAVAILABLE' satisfies AuthErrorCode);
+  }
+
+  async confirmDeviceVerification(_deviceId: string, _code: string): Promise<void> {
+    throw authError('DEVICE_VERIFICATION_UNAVAILABLE' satisfies AuthErrorCode);
   }
 
   onAuthStateChanged(listener: (user: AuthUser | null) => void): () => void {

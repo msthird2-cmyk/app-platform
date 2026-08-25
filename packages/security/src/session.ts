@@ -1,4 +1,5 @@
 import { SecurityError, SecurityErrorCode } from './errors';
+import type { SecureStorage } from './types/storage';
 
 export interface SessionTokens {
   accessToken: string;
@@ -42,13 +43,15 @@ export interface SessionStore {
   clear(): Promise<void>;
 }
 
-export interface MinimalSecureStorage {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  remove(key: string): Promise<void>;
-}
-
-export function createSessionStore(storage: MinimalSecureStorage): SessionStore {
+/**
+ * Persists a session only to storage that can actually protect it. A session
+ * carries access and refresh tokens, so writing it to AsyncStorage or
+ * localStorage would leave them in plaintext; this fails closed instead.
+ */
+export function createSessionStore(storage: SecureStorage): SessionStore {
+  if (!storage.isHardwareBacked) {
+    throw new SecurityError(SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE);
+  }
   return {
     async load() {
       const raw = await storage.get(SESSION_KEY);

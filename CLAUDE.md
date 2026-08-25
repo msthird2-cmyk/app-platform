@@ -55,9 +55,11 @@ apps/
 packages/
   utils/        pure helpers, validation, safe logging
   theme/        tokens, ThemeProvider, ThemeSelector
-  security/     encryption, secure storage, recovery codes, app lock, biometrics, session
+  security/     encryption, key management, secure storage, recovery codes,
+                device registration and pairing, app lock, biometrics, session
   ui/           generic React Native components
-  data/         repository, sync, import/export, validation, conflict handling
+  data/         repository, sync, record encryption envelope, import/export,
+                validation, conflict handling
   auth/         login, signup, password reset, email verification, session, device verification
   account/      profile, settings, delete account, delete/export data
   backup/       manual/automatic backup, restore, status, progress
@@ -228,9 +230,106 @@ Encrypted envelopes must be versioned and must validate all parameters before ex
 
 Bind security context to authenticated encryption using AAD where appropriate, including at least the application identity and schema/envelope version; bind the user identity when the design permits it. A backup from one app/user/context must not silently become valid in another context merely because the passphrase matches.
 
-Keep an explicit accepted range for KDF iterations. Reject values outside the range before deriving a key.
+Keep an explicit accepted range for KDF iterations. Reject values outside the range before deriving a key — and reject a count outside it when a service is *configured*, not only when a payload is read. One authority, applied at both ends: `packages/security/src/kdfPolicy.ts`. A service that accepts a cost on the way in which it refuses on the way out produces backups it cannot itself restore, and the failure surfaces on the restore rather than at the mistake.
+
+Two `CryptoService` implementations exist and must stay byte-compatible. `WebCryptoService` is preferred wherever WebCrypto exists, because its derived key stays a non-extractable `CryptoKey` that JavaScript never sees. `PortableCryptoService` serves React Native, which provides neither `crypto.subtle`, `crypto.getRandomValues`, `btoa`, `atob`, `TextEncoder` nor `TextDecoder`; it uses audited pure-JavaScript primitives and takes its entropy by injection from the composition root. `createCryptoService` chooses between them by capability. `scripts/check-architecture.mjs` walks the imports out from the portable implementation and fails the build if anything on that path reaches for one of those globals — such a mistake would fail on a user's phone, not in CI.
+
+Do not lower cryptographic parameters to compensate for a slower runtime.
 
 Never hard-code keys, log keys, place keys in URLs, or store them as plaintext in Firebase.
+
+## Encryption key architecture
+
+Approved design. **Not implemented** — there is no record encryption, no key
+management service, no recovery flow and no DEK persistence in this repository
+yet. It is recorded here so that when it is built it cannot drift, and so that
+no intermediate step ships a weaker version of it. The reasoning behind each
+rule is in `docs/ARCHITECTURE.md`.
+
+Domain records will be encrypted on the device before they are persisted to
+Firestore. A randomly generated **Data Encryption Key (DEK)** encrypts them, and
+the DEK is never stored in plaintext in Firestore.
+
+```text
+Random DEK
+   |
+   +--> encrypts domain records
+   |
+   +--> wrapped for trusted-device transfer          (ECDH transport key)
+   |
+   +--> wrapped for recovery-code recovery
+   |
+   +--> optionally wrapped for encryption-passphrase recovery
+```
+
+Every path wraps the *same* DEK. None of them is the DEK and none derives it:
+the DEK is random, never a deterministic function of anything the user types. A
+passphrase change rewrites one wrapped copy and re-encrypts no records.
+
+**Multi-device onboarding — trusted-device pairing.** The normal way a second
+device obtains the DEK: an already trusted, unlocked device approves it; both
+sides establish a shared transport key over ECDH; a human-visible verification
+code is shown on both devices and must match; the trusted device transfers the
+DEK wrapped under that transport key. The server relays public keys, pairing
+state and wrapped material only — it never receives the plaintext DEK and never
+adjudicates the pairing. This is not the client-authoritative device
+verification banned above: the server holds no secret the client could read and
+the client writes no verdict. The NetWorth AI trusted-device ECDH pairing
+implementation is the reference design; do not invent a second mechanism.
+
+**Zero-trusted-device recovery.** A user who has lost every trusted device
+recovers with their recovery code, which unwraps the DEK **locally**. It is a
+cryptographic key-escrow mechanism, not merely an authentication factor: the
+unwrap either succeeds or fails cryptographically, so nothing compares a secret,
+nothing needs a trusted server, and Firebase Spark must not be used to perform
+client-side secret comparison. A server-side recovery-code *authentication*
+mechanism is a separate capability for when Blaze or other server infrastructure
+exists; it does not replace this one.
+
+**Optional encryption passphrase.** A user may additionally set a passphrase
+that wraps the DEK, giving a second local recovery path. It is optional, not
+required for normal record access, and must never be used as the DEK itself.
+
+**Where it lives.** Record encryption is a shared platform capability, behind
+the shared security and data abstractions, so NetWorth Tracker, BolKhaata,
+Dukandar, Hotel Listing and future applications use one implementation. Key
+material and lifecycle belong to `packages/security`; the record envelope and
+its persistence to `packages/data`. Applications declare which fields are
+sensitive. Do not implement encryption for one application.
+
+**Firestore-visible metadata** stays limited to what ownership, synchronization
+and conflict resolution require — `id`, `updatedAt`, `revision`, `deletedAt` and
+the owning `uid`. Domain fields belong inside the encrypted payload. The
+consequence is deliberate: server-side querying, filtering and ordering on
+encrypted domain fields are outside this architecture, and leaving a field in
+plaintext to keep a query working defeats it. A privacy-preserving index is
+separate work if it is ever needed.
+
+**Local storage of the DEK** requires secure storage. It must not be persisted
+in AsyncStorage, `localStorage`, plaintext files, Firestore or any other
+ordinary persistent storage — the same rule `createSessionStore` already
+enforces for tokens through `SecureStorage.isHardwareBacked`.
+
+**Spark is a constraint, not an excuse.** Do not work around its limits by
+weakening this architecture: no plaintext secrets in Firestore, and no
+client-side check presented as server-side verification. A control that cannot
+be implemented securely on Spark is documented as absent.
+
+### Invariants
+
+These hold at every stage of implementation, including partial ones.
+
+- No plaintext DEK in Firestore.
+- No plaintext DEK in ordinary persistent storage.
+- No deterministic DEK derived directly from a user password or passphrase.
+- No plaintext financial or domain records in Firestore once record encryption
+  is enabled.
+- No silent plaintext fallback when the encryption key is unavailable.
+- A missing key fails closed.
+- Losing all trusted devices is recoverable through the recovery code and/or the
+  optional encryption passphrase.
+- Losing all trusted devices *and* all recovery credentials results in
+  unrecoverable encrypted data. This is intended, not a defect.
 
 ## Secure local storage and app lock
 
