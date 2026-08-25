@@ -1,0 +1,223 @@
+import { fromBase64, toBase64 } from '../crypto/base64';
+import { utf8Decode, utf8Encode } from '../crypto/utf8';
+import { SecurityError, SecurityErrorCode } from '../errors';
+import type { ProtectionTier } from '../protectionTier';
+import type { SecureStorage } from '../types/storage';
+
+/**
+ * `SecureStorage` for the browser, where there is no OS keystore to use.
+ *
+ * Values are sealed with AES-GCM under a **non-extractable** `CryptoKey`. That
+ * key is generated once, persisted as a live `CryptoKey` object, and can never
+ * be exported: `crypto.subtle.exportKey` refuses it, and its bytes never exist
+ * as a JavaScript value. What is persisted alongside it is ciphertext.
+ *
+ * So an attacker who can read browser storage gets sealed blobs and a key
+ * object they cannot serialise. That is a real improvement over storing secrets
+ * directly, and it is emphatically **not** equivalent to a keystore: any script
+ * running in this origin can still *use* the key, even without reading it. The
+ * tier says so, and `createKeyCustody` requires a composition root to opt into
+ * it explicitly rather than arriving there by accident.
+ */
+
+/** A minimal async record store. Backed by IndexedDB in a browser. */
+export interface KeyValueDatabase {
+  read(key: string): Promise<unknown>;
+  write(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
+  keys(): Promise<string[]>;
+}
+
+/** The slice of WebCrypto this needs — injected so it can be tested. */
+export interface SubtleLike {
+  generateKey(
+    algorithm: AesKeyGenParams,
+    extractable: boolean,
+    usages: readonly KeyUsage[],
+  ): Promise<CryptoKey>;
+  encrypt(
+    algorithm: AesGcmParams,
+    key: CryptoKey,
+    data: BufferSource,
+  ): Promise<ArrayBuffer>;
+  decrypt(
+    algorithm: AesGcmParams,
+    key: CryptoKey,
+    data: BufferSource,
+  ): Promise<ArrayBuffer>;
+}
+
+export interface WebNonExtractableStorageOptions {
+  subtle: SubtleLike;
+  database: KeyValueDatabase;
+  randomBytes: (length: number) => Uint8Array;
+  /** Where the wrapping key lives. Not a secret — the key object is. */
+  wrappingKeyName?: string;
+}
+
+const DEFAULT_WRAPPING_KEY_NAME = '__platform.kek';
+const IV_BYTES = 12;
+const VALUE_VERSION = 1;
+
+interface SealedValue {
+  v: number;
+  iv: string;
+  ct: string;
+}
+
+function isSealed(value: unknown): value is SealedValue {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as SealedValue).v === VALUE_VERSION &&
+    typeof (value as SealedValue).iv === 'string' &&
+    typeof (value as SealedValue).ct === 'string'
+  );
+}
+
+export class WebNonExtractableStorage implements SecureStorage {
+  readonly protection: ProtectionTier = 'browser-nonextractable';
+
+  private constructor(
+    private readonly options: Required<WebNonExtractableStorageOptions>,
+    private readonly wrappingKey: CryptoKey,
+  ) {}
+
+  static async create(
+    options: WebNonExtractableStorageOptions,
+  ): Promise<WebNonExtractableStorage> {
+    const resolved: Required<WebNonExtractableStorageOptions> = {
+      ...options,
+      wrappingKeyName: options.wrappingKeyName ?? DEFAULT_WRAPPING_KEY_NAME,
+    };
+    let key: CryptoKey;
+    try {
+      const existing = await resolved.database.read(resolved.wrappingKeyName);
+      if (existing && typeof existing === 'object' && 'algorithm' in existing) {
+        key = existing as CryptoKey;
+      } else {
+        // `false` is the whole point of this class: the key cannot be exported,
+        // so persisting it is persisting a capability, not a secret.
+        key = await resolved.subtle.generateKey(
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt', 'decrypt'],
+        );
+        await resolved.database.write(resolved.wrappingKeyName, key);
+      }
+    } catch (cause) {
+      throw new SecurityError(SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE, cause);
+    }
+    if (key.extractable) {
+      // A key that can be exported defeats the tier this class claims.
+      throw new SecurityError(SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE);
+    }
+    return new WebNonExtractableStorage(resolved, key);
+  }
+
+  async get(key: string): Promise<string | null> {
+    const stored = await this.options.database.read(this.entry(key));
+    if (stored === undefined || stored === null) return null;
+    if (!isSealed(stored)) {
+      // Something is there and is not ours. Report it as unreadable rather
+      // than as absent — the caller decides what that means.
+      throw new SecurityError(SecurityErrorCode.KEY_CUSTODY_UNUSABLE);
+    }
+    let plaintext: ArrayBuffer;
+    try {
+      plaintext = await this.options.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromBase64(stored.iv) as BufferSource },
+        this.wrappingKey,
+        fromBase64(stored.ct) as BufferSource,
+      );
+    } catch (cause) {
+      // A wrapping key regenerated by a cleared origin cannot open old blobs.
+      throw new SecurityError(SecurityErrorCode.KEY_CUSTODY_UNUSABLE, cause);
+    }
+    return utf8Decode(new Uint8Array(plaintext));
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    const iv = this.options.randomBytes(IV_BYTES);
+    const ciphertext = await this.options.subtle.encrypt(
+      { name: 'AES-GCM', iv: iv as BufferSource },
+      this.wrappingKey,
+      utf8Encode(value) as BufferSource,
+    );
+    const sealed: SealedValue = {
+      v: VALUE_VERSION,
+      iv: toBase64(iv),
+      ct: toBase64(new Uint8Array(ciphertext)),
+    };
+    await this.options.database.write(this.entry(key), sealed);
+  }
+
+  async remove(key: string): Promise<void> {
+    await this.options.database.delete(this.entry(key));
+  }
+
+  /** Removes this store's entries and leaves the wrapping key in place. */
+  async clear(): Promise<void> {
+    const all = await this.options.database.keys();
+    for (const name of all) {
+      if (name !== this.options.wrappingKeyName) await this.options.database.delete(name);
+    }
+  }
+
+  private entry(key: string): string {
+    return key;
+  }
+}
+
+/**
+ * IndexedDB behind `KeyValueDatabase`.
+ *
+ * IndexedDB is used rather than `localStorage` because it stores structured
+ * clones: a `CryptoKey` survives a round trip as a live key object, where
+ * `localStorage` would only ever hold a string. Browser-only — a composition
+ * root on any other platform must not call this.
+ */
+export function createIndexedDbDatabase(
+  databaseName = 'platform-secure',
+  storeName = 'entries',
+): KeyValueDatabase {
+  function open(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(databaseName, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(storeName)) {
+          request.result.createObjectStore(storeName);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function run<T>(mode: IDBTransactionMode, act: (store: IDBObjectStore) => IDBRequest): Promise<T> {
+    const database = await open();
+    try {
+      return await new Promise<T>((resolve, reject) => {
+        const request = act(database.transaction(storeName, mode).objectStore(storeName));
+        request.onsuccess = () => resolve(request.result as T);
+        request.onerror = () => reject(request.error);
+      });
+    } finally {
+      database.close();
+    }
+  }
+
+  return {
+    read: (key) => run<unknown>('readonly', (store) => store.get(key)),
+    write: async (key, value) => {
+      await run<unknown>('readwrite', (store) => store.put(value, key));
+    },
+    delete: async (key) => {
+      await run<unknown>('readwrite', (store) => store.delete(key));
+    },
+    keys: async () => {
+      const keys = await run<IDBValidKey[]>('readonly', (store) => store.getAllKeys());
+      return keys.map(String);
+    },
+  };
+}

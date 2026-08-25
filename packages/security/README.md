@@ -55,7 +55,12 @@ const records = await hashRecoveryCodes(codes, crypto, { now: Date.now() });
 | `MIN_KDF_ITERATIONS`, `MAX_KDF_ITERATIONS`, `DEFAULT_KDF_ITERATIONS`, `assertAllowedIterationCount` | The single KDF cost policy, applied when configuring a service and again when reading a payload |
 | `SecretHash`, `hashSecret`, `verifySecret` | Salted, iterated hashing for values that must resist offline attack |
 | `assessPassphrase`, `assertStrongPassphrase`, `PassphrasePolicy` | Passphrase strength, enforced before encryption |
-| `SecureStorage` (with `isHardwareBacked`), `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Storage and biometric interfaces plus fallbacks |
+| `SecureStorage` (with `protection`), `ProtectionTier`, `meetsProtection`, `assertMeetsProtection` | Storage contract and the tier every implementation must report honestly |
+| `OsKeystoreStorage`, `SecureStoreBackend` | Android Keystore / iOS Keychain, over an injected `expo-secure-store` module |
+| `WebNonExtractableStorage`, `createIndexedDbDatabase` | Browser tier: values sealed under a non-extractable WebCrypto key in IndexedDB |
+| `createPlatformSecureStorage` | Picks the strongest store the runtime provides; throws when neither tier is available |
+| `KeyCustody`, `KeyCustodyStatus`, `createKeyCustody` | Custody of an existing data encryption key — `absent` / `present` / `unusable`, and never creates one |
+| `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Test double and biometric interface plus fallback |
 | `generateRecoveryCodes`, `hashRecoveryCodes`, `verifyRecoveryCode`, `remainingRecoveryCodes` | Single-use, expiring recovery codes stored as salted hashes. Generation takes the platform's entropy source, like `PortableCryptoService` |
 | `RandomBytes`, `drawRandomBytes` | The one entropy contract. Injected from the composition root and validated on every draw |
 | `AppLockState`, `registerFailedAttempt`, `isLockedOut`, `shouldAutoLock`, `assertUnlockable` | PIN lock with lockout and idle auto-lock |
@@ -87,7 +92,11 @@ Everything that needs randomness takes a `RandomBytes` from the composition root
 
 `WebCryptoService` needs a WebCrypto implementation; on React Native use `createCryptoService`, which falls through to `PortableCryptoService`. Neither holds a key in hardware — a keystore-backed implementation behind the same interface is still the stronger option where one exists.
 
-PBKDF2 in JavaScript is roughly an order of magnitude slower than the native implementation — about 130 ms for 100,000 rounds on a development machine, and slower on a phone. The iteration count was deliberately not lowered to compensate. `InMemorySecureStorage` and `UnavailableBiometrics` are fallbacks for tests and the web, not production storage — `isHardwareBacked` is `false`, and `createSessionStore` refuses to persist tokens to any store that reports `false`. **No hardware-backed implementation ships in this repository**: an application must inject one before sessions can be persisted at all.
+PBKDF2 in JavaScript is roughly an order of magnitude slower than the native implementation — about 130 ms for 100,000 rounds on a development machine, and slower on a phone. The iteration count was deliberately not lowered to compensate. `InMemorySecureStorage` reports the `memory` tier and is a test double, not production storage — `createSessionStore` and `createKeyCustody` both refuse it. Production stores now ship: `OsKeystoreStorage` for React Native and `WebNonExtractableStorage` for the browser, selected by `createPlatformSecureStorage` and injected from the composition root.
+
+Two things about the tiers are worth stating plainly. `os-keystore` means the platform's secure storage is in use and **nothing more** — `expo-secure-store` cannot tell anyone whether the key is in hardware, so no implementation claims it is. And `browser-nonextractable` is a genuinely weaker tier: the wrapping key cannot be exported, but any script running in the origin can still use it, so a caller has to opt into that tier explicitly rather than arriving there by accident.
+
+Custody never creates a key. `load()` returns `null` for a genuine absence and throws for anything else, because an entry that exists and cannot be read — an Android keystore key invalidated by a lock-screen change — must not be mistaken for no key at all. Mint a replacement in that situation and every record encrypted under the original is orphaned while still sitting in the database.
 
 Recovery-code verification is deliberately *not* wired to any storage. Comparing a code on the client means handing the client the hash list to compare against, so the Firestore rules close that path; a trusted server has to own the check.
 

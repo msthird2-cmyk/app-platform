@@ -308,7 +308,7 @@ separate work if it is ever needed.
 **Local storage of the DEK** requires secure storage. It must not be persisted
 in AsyncStorage, `localStorage`, plaintext files, Firestore or any other
 ordinary persistent storage — the same rule `createSessionStore` already
-enforces for tokens through `SecureStorage.isHardwareBacked`.
+enforces for tokens through `SecureStorage.protection`.
 
 **Spark is a constraint, not an excuse.** Do not work around its limits by
 weakening this architecture: no plaintext secrets in Firestore, and no
@@ -334,6 +334,16 @@ These hold at every stage of implementation, including partial ones.
 ## Secure local storage and app lock
 
 `SecureStorage` is a security contract, not merely a key-value interface. Native Android/iOS implementations must use platform secure/keystore-backed storage (for example an approved Expo secure-storage mechanism). Do not silently inject AsyncStorage or browser `localStorage` for tokens/keys and call it secure.
+
+Every implementation reports a **protection tier**, and callers compare against the tier they require rather than trusting a name:
+
+- `os-keystore` — Android Keystore, iOS Keychain, or equivalent. This says the platform's own secure storage is in use. It says **nothing** about hardware: `expo-secure-store` exposes no way to discover whether the key sits in a TEE, in StrongBox or in software, so no implementation may claim that it does.
+- `browser-nonextractable` — values sealed under a WebCrypto key that cannot be exported, persisted in IndexedDB. Real protection, but not OS protection: any script in the origin can use the key. Never report this as `os-keystore`.
+- `memory` — process memory. Never acceptable for a persisted secret.
+
+A caller states its minimum (`os-keystore` by default) and construction throws when the store falls short. There is no degraded mode and no plaintext fallback. `memory` is not expressible as a minimum, by type.
+
+**Key custody.** A data encryption key is held through `createKeyCustody`, which loads, stores and clears an existing key and **never creates one**. Its `status()` distinguishes `absent` from `present` from `unusable`, and that distinction is load-bearing: an entry that exists but cannot be read — an Android keystore key invalidated by a lock-screen change, say — must never be reported as absent, or the caller will mint a replacement and orphan every record encrypted under the original. `load()` returns `null` only for a genuine absence and throws for everything else.
 
 On web, never persist passwords, recovery codes, encryption keys or long-lived authentication secrets in plain `localStorage`. Prefer in-memory handling or a specifically reviewed browser mechanism with documented threat limitations.
 

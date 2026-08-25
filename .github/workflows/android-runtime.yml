@@ -88,13 +88,47 @@ jobs:
 
       # GitHub's ubuntu runners expose /dev/kvm but not to unprivileged users.
       # Without this the emulator falls back to software rendering and times out.
+      #
+      # The usual udev-rule snippet is not reliable on its own: `static_node=kvm`
+      # is applied when the rule is loaded, and `udevadm trigger` only reaches a
+      # device udev has already registered, so on some runners the node keeps its
+      # original 0660 root:kvm permissions and the bare `test -w` that follows
+      # aborts the step under `bash -e` with no output at all. Observed on the
+      # API 29 runner of a run whose API 34 runner passed the identical step.
+      #
+      # So: ask udev first, then set the mode directly if udev did not, and only
+      # fail when the device genuinely is not there — with the diagnostics needed
+      # to tell "no nested virtualisation on this runner" apart from "permissions".
       - name: Enable KVM
         run: |
+          set -u
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -w /dev/kvm && echo "KVM is writable"
+          sudo udevadm control --reload-rules || echo "udevadm control failed; continuing"
+          sudo udevadm trigger --name-match=kvm || echo "udevadm trigger failed; continuing"
+
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::/dev/kvm does not exist on this runner - no nested virtualisation."
+            echo "--- virtualisation support ---"
+            lscpu | grep -i -E 'virtual|hypervisor' || true
+            ls -l /dev/kvm* 2>&1 || true
+            exit 1
+          fi
+
+          if [ ! -w /dev/kvm ]; then
+            echo "udev did not apply the rule; setting the mode directly"
+            sudo chmod 666 /dev/kvm || true
+          fi
+
+          if [ ! -w /dev/kvm ]; then
+            echo "::error::/dev/kvm exists but is not writable by $(id -un)."
+            ls -l /dev/kvm
+            id
+            exit 1
+          fi
+
+          ls -l /dev/kvm
+          echo "KVM is writable"
 
       - uses: pnpm/action-setup@v4
         with:

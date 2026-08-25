@@ -1,13 +1,16 @@
+import type { ProtectionTier } from '../protectionTier';
+
 /**
  * A key-value store for secret material.
  *
- * `isHardwareBacked` is part of the contract, not documentation: callers that
- * persist token material check it and refuse to write to a store that cannot
- * protect it. An implementation must not claim it unless the platform really
- * provides a keystore, keychain or equivalent.
+ * `protection` is part of the contract, not documentation: callers that persist
+ * secrets compare it against the tier they require and refuse to write to a
+ * store that cannot meet it. An implementation must report the tier it actually
+ * provides — see `ProtectionTier` for why this is a tier rather than a
+ * hardware-backed boolean.
  */
 export interface SecureStorage {
-  readonly isHardwareBacked: boolean;
+  readonly protection: ProtectionTier;
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
   remove(key: string): Promise<void>;

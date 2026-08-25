@@ -20,6 +20,17 @@ export const SecurityErrorCode = {
   RECOVERY_CODE_EXPIRED: 'RECOVERY_CODE_EXPIRED',
   RECOVERY_CODE_ALREADY_USED: 'RECOVERY_CODE_ALREADY_USED',
   PASSPHRASE_TOO_WEAK: 'PASSPHRASE_TOO_WEAK',
+  /** An entry exists but cannot be read back — never treat this as "no key". */
+  KEY_CUSTODY_UNUSABLE: 'KEY_CUSTODY_UNUSABLE',
+  /** The caller offered something that is not a key this system produced. */
+  KEY_CUSTODY_INVALID: 'KEY_CUSTODY_INVALID',
+  /**
+   * Secure storage is reachable, but the way it was asked for cannot be
+   * honoured on this platform. Distinct from SECURE_STORAGE_UNAVAILABLE on
+   * purpose: reporting a configuration mistake as "unavailable" is what made
+   * the Android startup failure this code was added for unreadable.
+   */
+  SECURE_STORAGE_MISCONFIGURED: 'SECURE_STORAGE_MISCONFIGURED',
 } as const;
 
 export type SecurityErrorCode = (typeof SecurityErrorCode)[keyof typeof SecurityErrorCode];

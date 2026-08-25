@@ -1,4 +1,5 @@
 import { getRandomBytes } from 'expo-crypto';
+import * as SecureStore from 'expo-secure-store';
 
 /**
  * X-1 runtime self-test.
@@ -231,6 +232,96 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       'production-cost payload round-trips',
       (await production.decrypt(productionPayload, 'passphrase', CONTEXT)) === 'timing',
     );
+
+    // ---- Gate 2: secure key custody -------------------------------------
+    //
+    // Same reasoning as the crypto above. `expo-secure-store` reaches a native
+    // module across the bridge; whether that module is present, and whether a
+    // key survives a round trip through the Android Keystore, cannot be
+    // learned from a host test. The key here is fixed, obviously fake, and
+    // never a real one.
+    const { createPlatformSecureStorage, createKeyCustody } = security;
+    const TEST_DEK = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 13) % 256);
+
+    const secureStoreAvailable = await SecureStore.isAvailableAsync();
+    record('expo-secure-store is available', secureStoreAvailable);
+
+    // Record the platform fact this gate exists to establish. The accessibility
+    // constants are read off the native module and only the iOS module defines
+    // them, so on Android this must be undefined. A build where it became a
+    // number would mean the library changed under us, and the conditional rule
+    // in OsKeystoreStorage would then start demanding a choice here.
+    record(
+      'keychain accessibility is an iOS-only concept on this device',
+      SecureStore.AFTER_FIRST_UNLOCK === undefined,
+      `AFTER_FIRST_UNLOCK=${String(SecureStore.AFTER_FIRST_UNLOCK)}`,
+    );
+
+    if (secureStoreAvailable) {
+      const storage = await createPlatformSecureStorage({
+        secureStore: SecureStore,
+        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+        keychainService: 'x1-selftest',
+      });
+      record(
+        'platform storage reports the os-keystore tier',
+        storage.protection === 'os-keystore',
+        storage.protection,
+      );
+
+      const custody = createKeyCustody(storage, { storageKey: 'x1.selftest.dek' });
+
+      // Start from a known-clean slate: a previous run may have left a key.
+      await custody.clear();
+      record('custody reports absent before anything is stored',
+        (await custody.status()) === 'absent');
+      record('load returns null when absent', (await custody.load()) === null);
+
+      await custody.store(TEST_DEK);
+      record('custody reports present after storing', (await custody.status()) === 'present');
+
+      const loaded = await custody.load();
+      const identical =
+        loaded !== null &&
+        loaded.length === TEST_DEK.length &&
+        loaded.every((byte, i) => byte === TEST_DEK[i]);
+      record('loaded bytes are identical to what was stored', identical,
+        `${loaded === null ? 'null' : loaded.length} bytes`);
+
+      await custody.clear();
+      record('custody reports absent after clear', (await custody.status()) === 'absent');
+      record('load returns null after clear', (await custody.load()) === null);
+
+      // Fail-closed paths, on the device rather than against a mock.
+      let refusedMemory = false;
+      try {
+        createKeyCustody(new security.InMemorySecureStorage());
+      } catch {
+        refusedMemory = true;
+      }
+      record('custody refuses process-memory storage', refusedMemory);
+
+      let refusedUnavailable = false;
+      try {
+        await createPlatformSecureStorage({
+          secureStore: { ...SecureStore, isAvailableAsync: async () => false },
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+        });
+      } catch {
+        refusedUnavailable = true;
+      }
+      record('storage fails closed when SecureStore reports unavailable', refusedUnavailable);
+
+      let rejectedBadKey = false;
+      try {
+        await custody.store(new Uint8Array(16));
+      } catch {
+        rejectedBadKey = true;
+      }
+      record('custody refuses a key of the wrong length', rejectedBadKey);
+      // Leave nothing behind on the device.
+      await custody.clear();
+    }
   } catch (error) {
     record('self-test completed without an unexpected throw', false, String(error));
   } finally {
