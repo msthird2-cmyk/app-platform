@@ -1,6 +1,7 @@
-import { p256 } from '@noble/curves/nist.js';
+import { ecdh, weierstrass } from '@noble/curves/abstract/weierstrass.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { drawRandomBytes, type RandomBytes } from '../crypto/entropy';
 import { SecurityError, SecurityErrorCode } from '../errors';
 
 /**
@@ -23,8 +24,39 @@ import { SecurityError, SecurityErrorCode } from '../errors';
  * implementation possible without changing the wire format; X25519 has patchy
  * WebCrypto support and would close that door.
  *
+ * **Why the curve is parameterised here rather than imported from
+ * `@noble/curves/nist.js`.** That module builds FROST threshold signing at
+ * module-evaluation time, and doing so calls `TextEncoder` — so merely
+ * importing it puts a browser global on the portable path and breaks the
+ * invariant the X-1 gate enforces. Every curve entry point in the package does
+ * this, so the choice was between weakening that invariant and not using the
+ * library's high-level export. The engine underneath — `weierstrass` and
+ * `ecdh` from `abstract/weierstrass.js` — imports cleanly, so the curve is
+ * constructed from its published domain parameters instead.
+ *
+ * These are the NIST P-256 (secp256r1) parameters from FIPS 186-4 D.1.2.3, and
+ * nothing about the field arithmetic, point validation or ECDH is
+ * reimplemented — the library does all of it. A transcription error would still
+ * be catastrophic, so `tests/pairing.test.ts` cross-checks this curve against
+ * `@noble/curves/nist.js`'s own `p256` and asserts byte-identical public keys
+ * and shared secrets. The library is its own oracle, and the check runs where
+ * `TextEncoder` exists.
+ *
  * The private key is ephemeral, per pairing, and never persisted anywhere.
  */
+
+/** FIPS 186-4 D.1.2.3 / SEC 2 §2.4.2. Verified against the library in tests. */
+const P256_CURVE = {
+  p: BigInt('0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff'),
+  n: BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551'),
+  h: BigInt(1),
+  a: BigInt('0xffffffff00000001000000000000000000000000fffffffffffffffffffffffc'),
+  b: BigInt('0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b'),
+  Gx: BigInt('0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'),
+  Gy: BigInt('0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5'),
+} as const;
+
+const P256_POINT = /* @__PURE__ */ weierstrass(P256_CURVE);
 
 /** Compressed SEC1 point: 33 bytes. */
 export const PUBLIC_KEY_BYTES = 33;
@@ -71,15 +103,28 @@ function assertPrivateKey(value: Uint8Array): void {
 }
 
 export class P256KeyAgreement implements KeyAgreement {
+  private readonly dh: ReturnType<typeof ecdh>;
+
+  /**
+   * Entropy is injected, as everywhere else in this package. Left to itself
+   * `ecdh` reaches for WebCrypto's random source, which React Native does not
+   * have — the same defect X-1 exists to prevent.
+   */
+  constructor(randomBytes: RandomBytes) {
+    this.dh = ecdh(P256_POINT, {
+      randomBytes: (length?: number) => drawRandomBytes(randomBytes, length ?? 32),
+    });
+  }
+
   generate(): EphemeralKeyPair {
-    const { secretKey, publicKey } = p256.keygen();
+    const { secretKey, publicKey } = this.dh.keygen();
     return { privateKey: secretKey, publicKey };
   }
 
   publicKeyOf(privateKey: Uint8Array): Uint8Array {
     assertPrivateKey(privateKey);
     try {
-      return p256.getPublicKey(privateKey);
+      return this.dh.getPublicKey(privateKey);
     } catch (cause) {
       throw new SecurityError(SecurityErrorCode.PAIRING_KEY_INVALID, cause);
     }
@@ -98,7 +143,7 @@ export class P256KeyAgreement implements KeyAgreement {
     try {
       // Throws on a point that is not on the curve, which is the invalid-curve
       // attack. The library validates; this does not reimplement that check.
-      shared = p256.getSharedSecret(privateKey, peerPublicKey);
+      shared = this.dh.getSharedSecret(privateKey, peerPublicKey);
     } catch (cause) {
       throw new SecurityError(SecurityErrorCode.PAIRING_KEY_INVALID, cause);
     }

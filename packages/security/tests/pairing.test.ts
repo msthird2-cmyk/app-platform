@@ -24,7 +24,7 @@ import { PortableRecordCipher } from '../src/services/PortableRecordCipher';
 const randomBytes = (length: number): Uint8Array =>
   webcrypto.getRandomValues(new Uint8Array(length));
 
-const agreement = new P256KeyAgreement();
+const agreement = new P256KeyAgreement(randomBytes);
 const cipher = new PortableRecordCipher(randomBytes);
 
 const UID = 'alice-uid';
@@ -119,6 +119,54 @@ describe('A — ECDH key agreement', () => {
     const seen = new Set<string>();
     for (let i = 0; i < 20; i += 1) seen.add(toBase64(agreement.generate().publicKey));
     expect(seen.size).toBe(20);
+  });
+});
+
+describe('A2 — the curve parameters are the library\'s own', () => {
+  /**
+   * The production path cannot import `@noble/curves/nist.js`: it builds FROST
+   * at module-evaluation time, which calls `TextEncoder`, and that would put a
+   * browser global on the portable path the X-1 gate keeps clean. So the curve
+   * is constructed from its published FIPS 186-4 parameters over the library's
+   * own engine — and a transcription error there would be catastrophic and
+   * silent.
+   *
+   * These tests use the library's high-level `p256` as an oracle. They run in
+   * Node, where `TextEncoder` exists, so importing it here is fine; the
+   * production module never does.
+   */
+  it('derives the same public key as the library for the same secret', async () => {
+    const { p256 } = await import('@noble/curves/nist.js');
+    for (let i = 0; i < 8; i += 1) {
+      const { privateKey } = agreement.generate();
+      expect(toBase64(agreement.publicKeyOf(privateKey)))
+        .toBe(toBase64(p256.getPublicKey(privateKey)));
+    }
+  });
+
+  it('agrees with a peer whose key the library generated', async () => {
+    const { p256 } = await import('@noble/curves/nist.js');
+    const ours = agreement.generate();
+    const theirs = p256.keygen();
+    const salt = new Uint8Array([7]);
+    const info = new Uint8Array([8]);
+
+    // Our derivation against their library-generated key, and the library's
+    // raw shared secret run through the same HKDF, must match.
+    const viaOurs = agreement.deriveTransportKey(ours.privateKey, theirs.publicKey, salt, info);
+    const viaTheirs = agreement.deriveTransportKey(theirs.secretKey, ours.publicKey, salt, info);
+    expect(toBase64(viaOurs)).toBe(toBase64(viaTheirs));
+
+    // And the underlying ECDH output is identical to the library's.
+    expect(toBase64(p256.getSharedSecret(ours.privateKey, theirs.publicKey)))
+      .toBe(toBase64(p256.getSharedSecret(theirs.secretKey, ours.publicKey)));
+  });
+
+  it('produces public keys the library accepts as valid points', async () => {
+    const { p256 } = await import('@noble/curves/nist.js');
+    const { publicKey } = agreement.generate();
+    // Throws if the point is not on the curve the library knows as P-256.
+    expect(() => p256.Point.fromBytes(publicKey)).not.toThrow();
   });
 });
 

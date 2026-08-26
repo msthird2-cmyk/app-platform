@@ -243,6 +243,14 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
     const {
       createPlatformSecureStorage,
       createKeyCustody,
+      P256KeyAgreement,
+      createRecordCipher,
+      createPairingOffer,
+      acceptPairing,
+      derivePairingAgreement,
+      wrapDataKeyForPairing,
+      completePairing,
+      commitToPublicKey,
       createRecoveryEscrow,
       openRecoveryEscrow,
       recoverDataKey,
@@ -346,6 +354,21 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       // the browser globals deleted, which is the point of the harness — and
       // not the package codec, which is internal. A literal would drift from
       // the constant, so it is computed from it.
+      const toBase64Bytes = (bytes: Uint8Array): string => {
+        const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        let out = '';
+        for (let i = 0; i < bytes.length; i += 3) {
+          const a = bytes[i] as number;
+          const b = bytes[i + 1];
+          const c = bytes[i + 2];
+          out += ALPHA[a >> 2];
+          out += ALPHA[((a & 3) << 4) | ((b ?? 0) >> 4)];
+          out += b === undefined ? '=' : ALPHA[((b & 15) << 2) | ((c ?? 0) >> 6)];
+          out += c === undefined ? '=' : ALPHA[c & 63];
+        }
+        return out;
+      };
+
       const dekBase64 = (() => {
         const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
         let out = '';
@@ -444,6 +467,96 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       record('recovery restores the key through Gate 2 custody',
         restored !== null && restored.every((byte, i) => byte === TEST_DEK[i]),
         `${restored === null ? 'null' : restored.length} bytes`);
+
+      // ---- Gate 4: trusted-device pairing --------------------------------
+      //
+      // What this proves that the host suite cannot: that P-256 ECDH and
+      // HKDF-SHA256 execute under Hermes at all, and that two independent
+      // agreements on this engine reach byte-identical transport keys. A
+      // divergence there would not crash — it would mean two real devices
+      // could never pair, discovered long after shipping.
+      //
+      // No PBKDF2 anywhere in this block: the pairing transport derives from a
+      // Diffie-Hellman secret, and the whole block costs milliseconds rather
+      // than the ~25 seconds one production-cost derivation takes here.
+      await custody.clear();
+
+      const agreement = new P256KeyAgreement(randomBytes);
+      const pairingCipher = createRecordCipher({ randomBytes });
+      const PAIR_UID = 'x1-pairing-uid';
+
+      const { keyPair: initiator, session: offered } = createPairingOffer({
+        appName: 'x1-selftest',
+        now: Date.now(),
+        randomBytes,
+        agreement,
+      });
+      record('ECDH generates an ephemeral key pair on Hermes',
+        initiator.publicKey.length === 33 && initiator.privateKey.length === 32,
+        `pub=${initiator.publicKey.length} priv=${initiator.privateKey.length}`);
+      record('the offer publishes a commitment and no key',
+        offered.initiatorPublicKey === null && offered.commitment.length > 0);
+
+      const { keyPair: responder, responderPublicKey } = acceptPairing({
+        session: offered, now: Date.now(), agreement,
+      });
+      const published = {
+        ...offered,
+        responderPublicKey,
+        initiatorPublicKey: toBase64Bytes(initiator.publicKey),
+      };
+
+      const sideA = derivePairingAgreement({
+        session: published, privateKey: initiator.privateKey,
+        userId: PAIR_UID, now: Date.now(), agreement,
+      });
+      const sideB = derivePairingAgreement({
+        session: published, privateKey: responder.privateKey,
+        userId: PAIR_UID, now: Date.now(), agreement,
+      });
+
+      record('both sides derive the same transport key',
+        sideA.transportKey.length === 32 &&
+          sideA.transportKey.every((byte, i) => byte === sideB.transportKey[i]));
+      record('both sides show the same verification code',
+        sideA.code === sideB.code && /^\d{3}-\d{3}$/.test(sideA.code));
+
+      const pairContext = {
+        userId: PAIR_UID, appName: 'x1-selftest', sessionId: offered.id,
+      };
+      const wrappedKey = await wrapDataKeyForPairing({
+        dataKey: TEST_DEK, transportKey: sideA.transportKey,
+        context: pairContext, cipher: pairingCipher,
+      });
+      record('the wrapped key carries no key material',
+        !JSON.stringify(wrappedKey).includes(dekBase64));
+
+      const paired = await completePairing({
+        session: { ...published, wrapped: wrappedKey },
+        transportKey: sideB.transportKey,
+        context: pairContext, cipher: pairingCipher, custody, now: Date.now(),
+      });
+      record('the other side opens the wrapped key and takes custody',
+        paired.every((byte, i) => byte === TEST_DEK[i]),
+        `${paired.length} bytes`);
+
+      await custody.clear();
+
+      // Substitution: a relay swaps its own key in after seeing the
+      // responder's. The commitment was published first, so it no longer opens.
+      let substitutionCaught = false;
+      try {
+        const mitm = agreement.generate();
+        derivePairingAgreement({
+          session: { ...published, initiatorPublicKey: toBase64Bytes(mitm.publicKey) },
+          privateKey: mitm.privateKey, userId: PAIR_UID, now: Date.now(), agreement,
+        });
+      } catch {
+        substitutionCaught = true;
+      }
+      record('a substituted public key fails the commitment', substitutionCaught);
+      record('the commitment is reproducible on this engine',
+        commitToPublicKey(initiator.publicKey) === offered.commitment);
 
       // Leave nothing behind on the device.
       await custody.clear();

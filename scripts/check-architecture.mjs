@@ -101,6 +101,10 @@ const PORTABLE_ENTRIES = [
   // record cipher is on the portable path too.
   'packages/security/src/services/PortableRecordCipher.ts',
   'packages/security/src/recordCrypto.ts',
+  // Gate 4: pairing runs on the same React Native devices.
+  'packages/security/src/pairing.ts',
+  'packages/security/src/services/KeyAgreement.ts',
+  'packages/security/src/crypto/verificationCode.ts',
 ].map((path) => join(ROOT, path));
 const BROWSER_GLOBALS = [
   { pattern: /\bcrypto\s*\.\s*subtle\b/, name: 'crypto.subtle' },
@@ -179,6 +183,11 @@ const RECORD_PATH_ENTRIES = [
   'packages/security/src/recordCrypto.ts',
   'packages/security/src/services/PortableRecordCipher.ts',
   'packages/security/src/services/WebRecordCipher.ts',
+  // The pairing transport key is HKDF over a Diffie-Hellman secret. Stretching
+  // a high-entropy secret buys nothing and would cost ~25s per pairing on the
+  // hardware the X-1 gate measures.
+  'packages/security/src/pairing.ts',
+  'packages/security/src/services/KeyAgreement.ts',
 ].map((path) => join(ROOT, path));
 
 const KDF_ON_RECORD_PATH = [
@@ -225,8 +234,65 @@ for (const file of recordPathFiles) {
   }
 }
 
-// Still out of scope, and still worth failing on.
-const OUT_OF_SCOPE = ['AppCheck', 'ECDH'];
+// Still out of scope, and still worth failing on. ECDH left the list when Gate 4
+// implemented it; App Check has no implementation and no approval.
+const OUT_OF_SCOPE = ['AppCheck'];
+
+// ---- Gate 4 architectural rules ----------------------------------------
+//
+// Two properties the pairing design rests on, both of which are structural and
+// so can be checked rather than merely intended.
+
+// Cryptography must not migrate into the relay. packages/firebase moves
+// documents; every decision about whether a pairing is safe belongs on the two
+// devices. A key agreement or a cipher construction appearing here would mean
+// the relay had started participating in the protocol it is meant to carry.
+const CRYPTO_IN_RELAY = [
+  { pattern: /\bgetSharedSecret\b|\bderiveTransportKey\b|\bp256\b/, name: 'a key agreement' },
+  { pattern: /\bgcm\s*\(|subtle\s*\.\s*(?:encrypt|decrypt|deriveBits|deriveKey)\b/, name: 'a cipher' },
+  { pattern: /\bverificationCode\b|\bcommitToPublicKey\b/, name: 'the verification code' },
+];
+for (const file of sources.filter((f) => relative(ROOT, f).startsWith('packages/firebase/src/'))) {
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const { pattern, name } of CRYPTO_IN_RELAY) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${relative(ROOT, file)} performs ${name}. packages/firebase relays pairing ` +
+          'material; the protocol runs in packages/security, on both devices.',
+      );
+    }
+  }
+}
+
+// No client-authoritative verdict, anywhere. A pairing is authorised by a
+// person comparing a code and by the wrapped key opening under the agreed
+// transport secret — never by a field asserting that it happened. On Spark
+// nothing could adjudicate such a field, so writing one is the banned pattern.
+const VERDICT_FIELD =
+  /\b(?:verified|isVerified|approved|isApproved|pairingStatus)\s*:\s*(?:true|'verified'|"verified")/;
+for (const file of sources) {
+  const path = relative(ROOT, file);
+  if (!path.startsWith('packages/') && !path.startsWith('apps/')) continue;
+  if (path.includes('/tests/') || path.endsWith('.test.ts') || path.endsWith('.test.tsx')) continue;
+  const code = stripComments(readFileSync(file, 'utf8'));
+  if (VERDICT_FIELD.test(code)) {
+    failures.push(
+      `${path} writes a verification verdict. A verdict a client can write is a ` +
+        'verdict an attacker can write; pairing is authorised by the key agreement.',
+    );
+  }
+}
+
+const RULES_FILE = join(ROOT, 'firestore.rules');
+if (existsSync(RULES_FILE)) {
+  const rules = readFileSync(RULES_FILE, 'utf8').replace(/\/\/[^\n]*/g, '');
+  if (/\bdata\s*\.\s*(?:verified|isVerified|approved|pairingStatus)\b/.test(rules)) {
+    failures.push(
+      'firestore.rules reads a client-written verification verdict. ' +
+        'Authorization must come from the request and from immutable session fields.',
+    );
+  }
+}
 
 // Plaintext key-value stores. Deliberately not a bare `localStorage` match:
 // IndexedDB is permitted and is reached through `indexedDB`, and the browser
