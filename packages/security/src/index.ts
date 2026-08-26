@@ -125,3 +125,19 @@ export {
   getOrCreateDeviceId,
   assertRegistered,
 } from './deviceRegistration';
+export {
+  type RecordEnvelope,
+  type RecordContext,
+  RECORD_ENVELOPE_VERSION,
+  RECORD_PURPOSE,
+  recordAdditionalData,
+  assertRecordEnvelope,
+} from './recordEnvelope';
+export { encryptRecordPayload, decryptRecordPayload } from './recordCrypto';
+export type { RecordCipher } from './types/recordCipher';
+export { WebRecordCipher } from './services/WebRecordCipher';
+export { PortableRecordCipher } from './services/PortableRecordCipher';
+export {
+  createRecordCipher,
+  type CreateRecordCipherOptions,
+} from './services/createRecordCipher';

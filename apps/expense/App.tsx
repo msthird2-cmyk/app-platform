@@ -6,6 +6,7 @@ import {
   createCryptoService,
   createDataKeyLifecycle,
   createKeyCustody,
+  createRecordCipher,
   InMemoryRecoveryEscrowStore,
 } from '@platform/security';
 import type { RecoveryEscrowStore, SecureStorage } from '@platform/security';
@@ -46,6 +47,10 @@ export default function App({
   escrowStore = new InMemoryRecoveryEscrowStore(),
 }: ExpenseAppProps) {
   const cryptoService = createCryptoService({ randomBytes: getRandomBytes });
+  // AES-256-GCM directly under the data encryption key. No KDF: the key is
+  // already 256 random bits, and stretching it at the shipped 210,000 rounds
+  // would add roughly 25 seconds to saving a single record on Android.
+  const recordCipher = createRecordCipher({ randomBytes: getRandomBytes });
 
   /**
    * One lifecycle per signed-in user. The escrow is bound to the user id, so
@@ -71,6 +76,7 @@ export default function App({
       repository={new InMemoryRepository()}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}
+      recordCipher={recordCipher}
       secureStorage={secureStorage}
       signedOut={
         <LoginScreen

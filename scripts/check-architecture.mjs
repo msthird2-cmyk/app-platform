@@ -97,6 +97,10 @@ for (const file of sources.filter((f) => relative(ROOT, f).startsWith('packages/
 const PORTABLE_ENTRIES = [
   'packages/security/src/services/PortableCryptoService.ts',
   'packages/security/src/recoveryCodes.ts',
+  // X-2: record payloads are sealed on the same React Native devices, so the
+  // record cipher is on the portable path too.
+  'packages/security/src/services/PortableRecordCipher.ts',
+  'packages/security/src/recordCrypto.ts',
 ].map((path) => join(ROOT, path));
 const BROWSER_GLOBALS = [
   { pattern: /\bcrypto\s*\.\s*subtle\b/, name: 'crypto.subtle' },
@@ -163,13 +167,66 @@ for (const file of portableFiles) {
 // `AsyncStorage` and `localStorage` are the comments explaining why they are
 // not used — and those must stay readable rather than being contorted to dodge
 // a grep.
-const X2_SYMBOLS = [
-  'encryptRecord',
-  'decryptRecord',
-  'DataKeyService',
-  'recordEnvelope',
-  'EncryptedRecordEnvelope',
+// X-2 is implemented, so the symbols this guard used to ban are now the
+// feature. What replaces them is the rule that makes the feature correct.
+//
+// The record path must never derive a key. The DEK arrives as 256 uniformly
+// random bits; stretching it buys nothing, and at the shipped 210,000 rounds it
+// would add roughly 25 seconds per record on the Android hardware the X-1 gate
+// measures. That is a property of the import graph, so it is checkable: walk
+// out from the record crypto entry points and fail on any KDF.
+const RECORD_PATH_ENTRIES = [
+  'packages/security/src/recordCrypto.ts',
+  'packages/security/src/services/PortableRecordCipher.ts',
+  'packages/security/src/services/WebRecordCipher.ts',
+].map((path) => join(ROOT, path));
+
+const KDF_ON_RECORD_PATH = [
+  { pattern: /\bpbkdf2\b/i, name: 'PBKDF2' },
+  { pattern: /\bderiveKey\b/, name: 'deriveKey' },
+  { pattern: /\bDEFAULT_KDF_ITERATIONS\b|\bMIN_KDF_ITERATIONS\b/, name: 'a KDF iteration count' },
 ];
+
+// Modules the *passphrase* path also reaches — shared leaves such as the
+// envelope constants and the KDF policy itself. They name PBKDF2 legitimately,
+// on behalf of the other path, so scanning them would flag every record file
+// that imports an AES constant. What is left after removing them is the code
+// that exists only to encrypt records, which is where a KDF call would be a
+// real defect.
+const PASSPHRASE_ENTRIES = [
+  'packages/security/src/services/PortableCryptoService.ts',
+  'packages/security/src/services/WebCryptoService.ts',
+].map((path) => join(ROOT, path));
+
+const passphraseFiles = new Set();
+for (const entry of PASSPHRASE_ENTRIES) {
+  if (existsSync(entry)) portableSurface(entry, passphraseFiles);
+}
+
+const recordPathFiles = new Set();
+for (const entry of RECORD_PATH_ENTRIES) {
+  if (!existsSync(entry)) {
+    failures.push(`${relative(ROOT, entry)} is missing — the record-path KDF guard cannot run.`);
+    continue;
+  }
+  portableSurface(entry, recordPathFiles);
+}
+for (const shared of passphraseFiles) recordPathFiles.delete(shared);
+
+for (const file of recordPathFiles) {
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const { pattern, name } of KDF_ON_RECORD_PATH) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${relative(ROOT, file)} uses ${name} on the record encryption path. ` +
+          'The data encryption key is already random and must be used directly.',
+      );
+    }
+  }
+}
+
+// Still out of scope, and still worth failing on.
+const OUT_OF_SCOPE = ['AppCheck', 'ECDH'];
 
 // Plaintext key-value stores. Deliberately not a bare `localStorage` match:
 // IndexedDB is permitted and is reached through `indexedDB`, and the browser
@@ -180,9 +237,8 @@ const PLAINTEXT_STORES = [
   { pattern: /\b(?:window\.|globalThis\.)?sessionStorage\s*[.[]/, name: 'sessionStorage' },
 ];
 
-// A log line that names key material. `console.log(recoveryCode)` is the whole
-// of the attack: the secret leaves the process and lands somewhere durable.
-const SECRET_LOG = /console\.(?:log|info|warn|error|debug)\s*\([^)]*\b(?:recoveryCode|recovery_code|dataKey|dek|wrappingKey|passphrase|plaintextKey)\b/i;
+// A log line that names key material or a decrypted payload.
+const SECRET_LOG = /console\.(?:log|info|warn|error|debug)\s*\([^)]*\b(?:recoveryCode|recovery_code|dataKey|dek|wrappingKey|passphrase|plaintextKey|plaintext|decrypted)\b/i;
 
 const SECRET_BEARING = sources.filter((f) => {
   const path = relative(ROOT, f);
@@ -202,12 +258,9 @@ for (const file of SECRET_BEARING) {
   const code = stripComments(readFileSync(file, 'utf8'));
   const where = relative(ROOT, file);
 
-  for (const symbol of X2_SYMBOLS) {
+  for (const symbol of OUT_OF_SCOPE) {
     if (new RegExp(`\\b${symbol}\\b`).test(code)) {
-      failures.push(
-        `${where} references ${symbol}. Record encryption is X-2 and is not in scope; ` +
-          'Gate 3 escrows an existing key and must not encrypt domain records.',
-      );
+      failures.push(`${where} references ${symbol}, which is not in scope.`);
     }
   }
 

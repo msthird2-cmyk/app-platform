@@ -14,3 +14,9 @@ export {
   parseExportBundle,
   decryptExportBundle,
 } from './importExport';
+export {
+  EncryptingRepository,
+  ENCRYPTED_FIELD,
+  type EncryptingRepositoryOptions,
+  type DataKeySource,
+} from './services/EncryptingRepository';

@@ -17,3 +17,7 @@ export {
   type DataKeyGateLabels,
 } from './DataKeyGate';
 export { dataKeyStep, type DataKeyStep } from './dataKeyStep';
+export {
+  EncryptedRepositoryProvider,
+  type EncryptedRepositoryProviderProps,
+} from './EncryptedRepositoryProvider';
