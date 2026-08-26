@@ -35,6 +35,10 @@ export function backupError(code: string, cause?: unknown): ServiceError {
   return new ServiceError('backup', code, cause);
 }
 
+export function securityError(code: string, cause?: unknown): ServiceError {
+  return new ServiceError('security', code, cause);
+}
+
 export function isServiceError(value: unknown, domain?: string): value is ServiceError {
   return value instanceof ServiceError && (domain === undefined || value.domain === domain);
 }
