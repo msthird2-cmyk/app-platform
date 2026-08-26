@@ -10,6 +10,7 @@ export { FirebaseRepository } from './services/FirebaseRepository';
 export { FirebaseAccountService } from './services/FirebaseAccountService';
 export { FirebaseBackupService } from './services/FirebaseBackupService';
 export { FirebaseRecoveryEscrowStore } from './services/FirebaseRecoveryEscrowStore';
+export { FirebasePairingRelay, type PairingRelay } from './services/FirebasePairingRelay';
 export {
   AdaptedSecureStorage,
   type AdaptedSecureStorageOptions,

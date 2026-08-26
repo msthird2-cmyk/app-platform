@@ -279,6 +279,143 @@ service cloud.firestore {
       allow delete: if isOwner(uid);
     }
 
+    // ---- trusted-device pairing -----------------------------------------
+
+    // A relay, and only a relay. It carries two ephemeral public keys, a
+    // commitment to the first of them, one ciphertext and some timestamps. It
+    // holds no secret either device could not compute for itself.
+    //
+    // Note what is absent: there is no `verified`, no `status`, no verdict of
+    // any kind. That is the point. On Spark there is no trusted server to
+    // adjudicate a pairing, and a verdict a client can write is a verdict an
+    // attacker can write — which is exactly the banned pattern in CLAUDE.md.
+    // What authorises the transfer instead is that the wrapped key opens only
+    // under a transport secret derived from both ephemeral keys, and the
+    // trusted device publishes it only after a person has compared a six-digit
+    // code on two screens. See packages/security/src/pairing.ts.
+    //
+    // The state machine is expressed as append-only fields rather than a status
+    // string, so these rules can enforce it: each step may add its own field
+    // once and may never change one already written, which makes replay and
+    // rewrite impossible rather than merely discouraged.
+
+    // The longest a session may claim to live. A client sets its own expiry, so
+    // it is bounded here — otherwise a session could be minted that never ages
+    // out, and an abandoned offer would stay openable indefinitely.
+    function hasSaneExpiry() {
+      return request.resource.data.expiresAt is int
+        && request.resource.data.expiresAt > request.time.toMillis()
+        && request.resource.data.expiresAt <= request.time.toMillis() + 900000;
+    }
+
+    function isPairingOffer(sessionId) {
+      return sessionId.matches('^[A-Za-z0-9_-]{1,64}$')
+        && request.resource.data.keys().hasOnly([
+             'id', 'version', 'appName', 'commitment',
+             'createdAt', 'updatedAt', 'expiresAt'
+           ])
+        && request.resource.data.keys().hasAll([
+             'id', 'version', 'appName', 'commitment',
+             'createdAt', 'updatedAt', 'expiresAt'
+           ])
+        && request.resource.data.id == sessionId
+        && request.resource.data.version == 1
+        && request.resource.data.appName is string
+        && request.resource.data.commitment is string
+        && request.resource.data.commitment.size() <= 128
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && hasSaneExpiry();
+    }
+
+    // Everything a session is identified by. None of it may ever change: a
+    // rewritten commitment is the man-in-the-middle this design detects, and a
+    // rewritten expiry is a session that never closes.
+    function pairingCoreUnchanged() {
+      return request.resource.data.id == resource.data.id
+        && request.resource.data.version == resource.data.version
+        && request.resource.data.appName == resource.data.appName
+        && request.resource.data.commitment == resource.data.commitment
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.expiresAt == resource.data.expiresAt;
+    }
+
+    // Each progressive field may be written once. Absent stays absent or
+    // becomes present; present never changes. Written out per field rather than
+    // generically so that an auditor can read what is enforced.
+    function initiatorKeyAppendOnly() {
+      return !('initiatorPublicKey' in resource.data)
+        || (('initiatorPublicKey' in request.resource.data)
+            && request.resource.data.initiatorPublicKey == resource.data.initiatorPublicKey);
+    }
+
+    function responderKeyAppendOnly() {
+      return !('responderPublicKey' in resource.data)
+        || (('responderPublicKey' in request.resource.data)
+            && request.resource.data.responderPublicKey == resource.data.responderPublicKey);
+    }
+
+    function wrappedAppendOnly() {
+      return !('wrapped' in resource.data)
+        || (('wrapped' in request.resource.data)
+            && request.resource.data.wrapped == resource.data.wrapped);
+    }
+
+    function pairingKeyShape() {
+      return (!('initiatorPublicKey' in request.resource.data)
+              || (request.resource.data.initiatorPublicKey is string
+                  && request.resource.data.initiatorPublicKey.size() <= 128))
+        && (!('responderPublicKey' in request.resource.data)
+            || (request.resource.data.responderPublicKey is string
+                && request.resource.data.responderPublicKey.size() <= 128));
+    }
+
+    // The wrapped DEK, shaped. No digest, no hint, nothing that could verify a
+    // guess offline — the same allowlist discipline as the recovery escrow.
+    function wrappedShape() {
+      return !('wrapped' in request.resource.data)
+        || (request.resource.data.wrapped.keys().hasOnly(['v', 'alg', 'iv', 'ct'])
+            && request.resource.data.wrapped.v == 1
+            && request.resource.data.wrapped.alg == 'AES-GCM'
+            && request.resource.data.wrapped.iv is string
+            && request.resource.data.wrapped.ct is string
+            && request.resource.data.wrapped.ct.size() <= 4096);
+    }
+
+    function isAdvancingPairing() {
+      return request.resource.data.keys().hasOnly([
+               'id', 'version', 'appName', 'commitment',
+               'createdAt', 'updatedAt', 'expiresAt',
+               'initiatorPublicKey', 'responderPublicKey', 'wrapped', 'consumedAt'
+             ])
+        && pairingCoreUnchanged()
+        && request.resource.data.updatedAt == request.time
+        // Expired sessions are dead. Nothing advances them, whatever state they
+        // reached, and nothing extends them.
+        && resource.data.expiresAt > request.time.toMillis()
+        // Single use: once spent, the document is immutable.
+        && !('consumedAt' in resource.data)
+        && (!('consumedAt' in request.resource.data)
+            || request.resource.data.consumedAt == request.time)
+        && initiatorKeyAppendOnly()
+        && responderKeyAppendOnly()
+        && wrappedAppendOnly()
+        && pairingKeyShape()
+        && wrappedShape();
+    }
+
+    match /users/{uid}/pairing/{sessionId} {
+      allow get: if isOwner(uid);
+      // Both devices know the session id — it travels out of band, in the QR
+      // code or link that starts the pairing. Nothing needs to enumerate them.
+      allow list: if false;
+      allow create: if isOwner(uid) && isPairingOffer(sessionId) && hasNoReservedFields();
+      allow update: if isOwner(uid) && isAdvancingPairing() && hasNoReservedFields();
+      // A user may abandon a pairing. Deleting destroys no key: the DEK is not
+      // here, only a copy wrapped for one ephemeral transport key.
+      allow delete: if isOwner(uid);
+    }
+
     // ---- client-inaccessible -------------------------------------------
 
     // A verification code is a secret the client must not be able to read, and

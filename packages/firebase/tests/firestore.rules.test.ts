@@ -567,6 +567,241 @@ describe('reserved security fields', () => {
 });
 
 /**
+ * Gate 4: the pairing relay.
+ *
+ * The relay carries public material and one ciphertext. The rules enforce the
+ * state machine as append-only fields, which is what makes replay and rewrite
+ * impossible rather than merely discouraged — and there is no verdict field for
+ * a client to forge, because on Spark no server could adjudicate one.
+ */
+describe('pairing relay', () => {
+  const SID = 'session-abc123';
+  const PATH = `users/${ALICE}/pairing/${SID}`;
+  const TTL = 5 * 60 * 1000;
+
+  function offer(extra: Record<string, unknown> = {}) {
+    return {
+      id: SID,
+      version: 1,
+      appName: 'networth',
+      commitment: 'Y29tbWl0bWVudA==',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      expiresAt: Date.now() + TTL,
+      ...extra,
+    };
+  }
+
+  /** A session already on the relay, written past the rules. */
+  async function seed(extra: Record<string, unknown> = {}, expiresAt = Date.now() + TTL) {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), PATH), {
+        id: SID, version: 1, appName: 'networth', commitment: 'Y29tbWl0bWVudA==',
+        createdAt: new Date(0), updatedAt: new Date(0), expiresAt, ...extra,
+      });
+    });
+  }
+
+  const WRAPPED = { v: 1, alg: 'AES-GCM', iv: 'AAAAAAAAAAAAAAAA', ct: 'AAAAAAAAAAAAAAAAAAAA' };
+
+  describe('owner', () => {
+    it('creates, reads and abandons a session', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertSucceeds(setDoc(doc(db, PATH), offer()));
+      await assertSucceeds(getDoc(doc(db, PATH)));
+      await assertSucceeds(deleteDoc(doc(db, PATH)));
+    });
+
+    it('walks the whole protocol', async () => {
+      await seed();
+      const db = verified(env, ALICE).firestore();
+      // Responder publishes its key. Exactly what FirebasePairingRelay sends:
+      // the new field and the server clock, never the immutable core.
+      await assertSucceeds(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), responderPublicKey: 'cmVzcG9uZGVy',
+      }, { merge: true }));
+      // Initiator opens the commitment.
+      await assertSucceeds(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), initiatorPublicKey: 'aW5pdGlhdG9y',
+      }, { merge: true }));
+      // Initiator publishes the wrapped key.
+      await assertSucceeds(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), wrapped: WRAPPED,
+      }, { merge: true }));
+      // Responder marks it spent.
+      await assertSucceeds(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), consumedAt: serverTimestamp(),
+      }, { merge: true }));
+    });
+
+    it('denies listing pairing sessions', async () => {
+      await seed();
+      const db = verified(env, ALICE).firestore();
+      await assertFails(getDocs(collection(db, `users/${ALICE}/pairing`)));
+      await assertFails(getDocs(collectionGroup(db, 'pairing')));
+    });
+  });
+
+  describe('non-owner', () => {
+    it('denies Bob everything', async () => {
+      await seed();
+      const db = verified(env, BOB).firestore();
+      await assertFails(getDoc(doc(db, PATH)));
+      await assertFails(setDoc(doc(db, PATH), offer()));
+      await assertFails(deleteDoc(doc(db, PATH)));
+      await assertFails(setDoc(doc(db, `users/${ALICE}/pairing/other`), offer({ id: 'other' })));
+    });
+
+    it('denies an unauthenticated client', async () => {
+      await seed();
+      const db = env.unauthenticatedContext().firestore();
+      await assertFails(getDoc(doc(db, PATH)));
+      await assertFails(setDoc(doc(db, PATH), offer()));
+    });
+  });
+
+  describe('the offer', () => {
+    it('denies a mismatched id, wrong version or client clock', async () => {
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, `users/${ALICE}/pairing/other`), offer()));
+      await assertFails(setDoc(doc(db, PATH), offer({ version: 2 })));
+      await assertFails(setDoc(doc(db, PATH), offer({ createdAt: new Date(0) })));
+    });
+
+    it('denies an expiry that is absent, past, or unboundedly far away', async () => {
+      const db = verified(env, ALICE).firestore();
+      const bad: Array<Record<string, unknown>> = [
+        { expiresAt: Date.now() - 1000 },
+        { expiresAt: Date.now() + 24 * 60 * 60 * 1000 },
+        { expiresAt: '5 minutes' },
+      ];
+      for (const extra of bad) {
+        await assertFails(setDoc(doc(db, PATH), offer(extra)), JSON.stringify(extra));
+      }
+      const partial = offer();
+      delete (partial as Record<string, unknown>).expiresAt;
+      await assertFails(setDoc(doc(db, PATH), partial));
+    });
+
+    it('denies publishing a public key in the offer itself', async () => {
+      // The commitment must come first; a key in the offer defeats it.
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), offer({ initiatorPublicKey: 'aW5pdA==' })));
+    });
+
+    it('denies any extra field, including a verdict', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const extra of [
+        { verified: true }, { status: 'verified' }, { trusted: true },
+        { dek: 'AAAA' }, { transportKey: 'AAAA' }, { note: 'hi' },
+      ]) {
+        await assertFails(setDoc(doc(db, PATH), offer(extra)), JSON.stringify(extra));
+      }
+    });
+
+    it('denies reserved authorization fields', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const reserved of [{ uid: ALICE }, { role: 'admin' }, { isAdmin: true }]) {
+        await assertFails(setDoc(doc(db, PATH), offer(reserved)));
+      }
+    });
+  });
+
+  describe('append-only progression', () => {
+    it('denies rewriting a public key once published', async () => {
+      await seed({ responderPublicKey: 'cmVzcG9uZGVy', initiatorPublicKey: 'aW5pdGlhdG9y' });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), responderPublicKey: 'ZGlmZmVyZW50',
+      }, { merge: true }));
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), initiatorPublicKey: 'ZGlmZmVyZW50',
+      }, { merge: true }));
+    });
+
+    it('denies rewriting the commitment, which is the MITM detection', async () => {
+      await seed();
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), commitment: 'ZGlmZmVyZW50',
+      }, { merge: true }));
+    });
+
+    it('denies rewriting the wrapped key, or extending the expiry', async () => {
+      await seed({ wrapped: WRAPPED });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), wrapped: { ...WRAPPED, ct: 'QkJCQkJCQkJCQkJC' },
+      }, { merge: true }));
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), expiresAt: Date.now() + 60 * 60 * 1000,
+      }, { merge: true }));
+    });
+
+    it('denies a malformed wrapped payload', async () => {
+      await seed();
+      const db = verified(env, ALICE).firestore();
+      const bad: unknown[] = [
+        { v: 2, alg: 'AES-GCM', iv: 'AA', ct: 'AA' },
+        { v: 1, alg: 'AES-CBC', iv: 'AA', ct: 'AA' },
+        { v: 1, alg: 'AES-GCM', iv: 42, ct: 'AA' },
+        { v: 1, alg: 'AES-GCM', iv: 'AA' },
+        { v: 1, alg: 'AES-GCM', iv: 'AA', ct: 'AA', digest: 'abc' },
+        'a string',
+      ];
+      for (const wrapped of bad) {
+        await assertFails(
+          setDoc(doc(db, PATH), { updatedAt: serverTimestamp(), wrapped }, { merge: true }),
+          JSON.stringify(wrapped),
+        );
+      }
+    });
+  });
+
+  describe('expiry and single use', () => {
+    it('denies advancing an expired session from any state', async () => {
+      const db = verified(env, ALICE).firestore();
+      for (const extra of [{}, { responderPublicKey: 'cmVzcA==' }, { wrapped: WRAPPED }]) {
+        await seed(extra, Date.now() - 1000);
+        await assertFails(setDoc(doc(db, PATH), {
+          updatedAt: serverTimestamp(), initiatorPublicKey: 'aW5pdA==',
+        }, { merge: true }), JSON.stringify(extra));
+      }
+    });
+
+    it('denies every write once the session is consumed', async () => {
+      await seed({ wrapped: WRAPPED, consumedAt: new Date() });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), initiatorPublicKey: 'aW5pdA==',
+      }, { merge: true }));
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), consumedAt: serverTimestamp(),
+      }, { merge: true }));
+    });
+
+    it('denies a client-chosen consumption time', async () => {
+      await seed({ wrapped: WRAPPED });
+      const db = verified(env, ALICE).firestore();
+      await assertFails(setDoc(doc(db, PATH), {
+        updatedAt: serverTimestamp(), consumedAt: new Date(0),
+      }, { merge: true }));
+    });
+  });
+
+  it('never accepts a verdict field on update either', async () => {
+    await seed({ responderPublicKey: 'cmVzcA==' });
+    const db = verified(env, ALICE).firestore();
+    for (const extra of [{ verified: true }, { status: 'confirmed' }, { approved: true }]) {
+      await assertFails(
+        setDoc(doc(db, PATH), { updatedAt: serverTimestamp(), ...extra }, { merge: true }),
+        JSON.stringify(extra),
+      );
+    }
+  });
+});
+
+/**
  * X-2: record documents must carry the encrypted envelope.
  *
  * This is the tightening `hasNoReservedFields` deferred until the envelope
