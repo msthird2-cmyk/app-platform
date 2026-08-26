@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
   assertSucceeds,
@@ -738,6 +738,43 @@ describe('recovery escrow', () => {
         await assertFails(setDoc(doc(db, PATH), escrow(reserved)));
       }
     });
+  });
+
+  it('accepts exactly the document the lifecycle writes, and its update', async () => {
+    // The shape FirebaseRecoveryEscrowStore sends: the flattened escrow from
+    // toRecoveryEscrowDocument plus the two server timestamps it adds. If the
+    // rule and the writer ever disagree, first-time setup fails at the last
+    // step and the user is left with no recovery path.
+    const db = verified(env, ALICE).firestore();
+    const written = {
+      id: ID,
+      version: 1,
+      algorithm: 'AES-GCM',
+      kdf: 'PBKDF2-SHA256',
+      iterations: 210_000,
+      salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+      iv: 'AAAAAAAAAAAAAAAA',
+      wrappedKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await assertSucceeds(setDoc(doc(db, PATH), written));
+
+    // Re-escrowing under a new code: createdAt carried back unchanged, as the
+    // store does by reading the stored value first.
+    let storedCreatedAt: unknown;
+    await env.withSecurityRulesDisabled(async (context) => {
+      storedCreatedAt = (await getDoc(doc(context.firestore(), PATH))).data()?.createdAt;
+    });
+    expect(storedCreatedAt).toBeDefined();
+    await assertSucceeds(
+      setDoc(doc(db, PATH), {
+        ...written,
+        wrappedKey: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        createdAt: storedCreatedAt,
+        updatedAt: serverTimestamp(),
+      }),
+    );
   });
 
   it('leaves the recovery-code hash path closed to its own owner', async () => {

@@ -11,3 +11,9 @@ export {
   type ServicesProviderProps,
 } from './ServicesProvider';
 export { AppCore, type AppCoreProps } from './AppCore';
+export {
+  DataKeyGate,
+  type DataKeyGateProps,
+  type DataKeyGateLabels,
+} from './DataKeyGate';
+export { dataKeyStep, type DataKeyStep } from './dataKeyStep';

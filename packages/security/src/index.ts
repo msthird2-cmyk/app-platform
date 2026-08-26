@@ -54,6 +54,7 @@ export {
   assertAllowedIterationCount,
 } from './kdfPolicy';
 export { InMemorySecureStorage, UnavailableBiometrics } from './services/InMemorySecureStorage';
+export { InMemoryRecoveryEscrowStore } from './services/InMemoryRecoveryEscrowStore';
 export {
   type RecoveryCodeRecord,
   type HashRecoveryCodesOptions,
@@ -80,6 +81,14 @@ export {
   toRecoveryEscrowDocument,
   fromRecoveryEscrowDocument,
 } from './recoveryEscrow';
+export {
+  type RecoveryEscrowStore,
+  type DataKeyState,
+  type DataKeyLifecycle,
+  type DataKeyLifecycleOptions,
+  type FirstTimeSetupResult,
+  createDataKeyLifecycle,
+} from './dataKeyLifecycle';
 export {
   type PassphrasePolicy,
   type PassphraseIssue,

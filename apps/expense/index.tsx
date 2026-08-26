@@ -38,30 +38,46 @@ const backupService = new InMemoryBackupService();
  * while the screen is locked. There is deliberately no `requireAuthentication`,
  * which would block the JavaScript thread waiting for a user who is not there.
  */
-function buildSecureStorage(): Promise<SecureStorage> {
+type Custody = {
+  secureStorage: SecureStorage;
+  /**
+   * Stated by the branch that built the storage, not read back off it.
+   * Deriving the minimum from whatever turned up would accept any downgrade
+   * silently, which is the opposite of what a minimum is for.
+   */
+  minimumProtection: 'os-keystore' | 'browser-nonextractable';
+};
+
+async function buildCustodyStorage(): Promise<Custody> {
   const subtle = (globalThis as { crypto?: { subtle?: unknown } }).crypto?.subtle;
   if (typeof subtle === 'object' && subtle !== null && typeof indexedDB !== 'undefined') {
-    return createPlatformSecureStorage({
-      subtle: subtle as Parameters<typeof createPlatformSecureStorage>[0]['subtle'],
-      database: createIndexedDbDatabase(),
-      randomBytes: getRandomBytes,
-    });
+    return {
+      secureStorage: await createPlatformSecureStorage({
+        subtle: subtle as Parameters<typeof createPlatformSecureStorage>[0]['subtle'],
+        database: createIndexedDbDatabase(),
+        randomBytes: getRandomBytes,
+      }),
+      // The browser has no OS keystore. Saying so here is the visible,
+      // auditable decision the tier system asks for.
+      minimumProtection: 'browser-nonextractable',
+    };
   }
-  return createPlatformSecureStorage({
+  const secureStorage = await createPlatformSecureStorage({
     secureStore: SecureStore,
     keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
     keychainService: 'expense',
   });
+  return { secureStorage, minimumProtection: 'os-keystore' };
 }
 
 function Root() {
-  const [secureStorage, setSecureStorage] = useState<SecureStorage | null>(null);
+  const [custody, setCustody] = useState<Custody | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    buildSecureStorage().then(
-      (storage) => !cancelled && setSecureStorage(storage),
+    buildCustodyStorage().then(
+      (built) => !cancelled && setCustody(built),
       // Fails closed: no in-memory substitute, no plaintext fallback.
       (error: unknown) => !cancelled && setFailure(String(error)),
     );
@@ -77,14 +93,14 @@ function Root() {
       </View>
     );
   }
-  if (!secureStorage) return <View style={{ flex: 1 }} />;
+  if (!custody) return <View style={{ flex: 1 }} />;
 
   return (
     <App
       authService={authService}
       accountService={accountService}
       backupService={backupService}
-      secureStorage={secureStorage}
+      secureStorage={custody.secureStorage} minimumProtection={custody.minimumProtection}
     />
   );
 }
