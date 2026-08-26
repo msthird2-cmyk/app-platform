@@ -15,6 +15,20 @@ export interface EncryptedPayload {
 export interface EncryptionContext {
   userId: string;
   appName: string;
+  /**
+   * Domain separation for keys derived from something other than a passphrase.
+   *
+   * `docs/ARCHITECTURE.md` requires that a recovery code used to derive an
+   * encryption key keep that KDF purpose separate from credential
+   * verification. Naming the purpose in the authenticated data is how: an
+   * escrow envelope cannot be replayed as a backup envelope, because the tag
+   * covers the purpose.
+   *
+   * Optional, and omitting it produces byte-identical additional data to
+   * before this field existed — otherwise every payload already written would
+   * become undecryptable. See `additionalData`.
+   */
+  purpose?: string | undefined;
 }
 
 /**

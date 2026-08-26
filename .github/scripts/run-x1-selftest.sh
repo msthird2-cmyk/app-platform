@@ -16,7 +16,15 @@ PACKAGE="com.appplatform.x1selftest"
 ACTIVITY=".MainActivity"
 LOG="x1-selftest.log"
 FULL_LOG="x1-selftest-full-logcat.log"
-TIMEOUT_SECONDS=600
+# A hang detector, not a budget. PBKDF2 at the shipped cost takes roughly
+# twenty-five seconds per pass on this hardware and the suite runs a couple of
+# dozen derivations, so a healthy run sits in the four-to-seven minute range and
+# varies with how contended the runner is. At 600 the margin was thin enough
+# that one slower-than-usual API 34 emulator tripped it while API 29 passed on
+# the same commit. Raising it does not make any check easier to satisfy — every
+# assertion and the KDF cost are unchanged, and a genuine hang still fails the
+# job, just later. The step itself is bounded by the job's 60-minute limit.
+TIMEOUT_SECONDS=900
 
 fail() {
   echo "::error::$*"

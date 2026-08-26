@@ -31,6 +31,17 @@ export const SecurityErrorCode = {
    * the Android startup failure this code was added for unreadable.
    */
   SECURE_STORAGE_MISCONFIGURED: 'SECURE_STORAGE_MISCONFIGURED',
+  /**
+   * The escrow document is not one this system wrote — wrong shape, wrong
+   * field types, or a wrapped key of the wrong size once opened. Distinct from
+   * a decryption failure, which is what a wrong recovery code produces.
+   */
+  RECOVERY_ESCROW_INVALID: 'RECOVERY_ESCROW_INVALID',
+  /**
+   * There is no escrow to open. Recovery stops here; it never proceeds to
+   * mint a replacement key, which would orphan every record under the old one.
+   */
+  RECOVERY_ESCROW_MISSING: 'RECOVERY_ESCROW_MISSING',
 } as const;
 
 export type SecurityErrorCode = (typeof SecurityErrorCode)[keyof typeof SecurityErrorCode];

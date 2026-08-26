@@ -42,6 +42,11 @@ export function additionalData(
       it: iterations,
       uid: context.userId,
       app: context.appName,
+      // Appended last and only when present, so a context without a purpose
+      // serialises to exactly the string it did before this key existed. Every
+      // payload written so far still authenticates; a purpose-bound one is a
+      // different domain and cannot be opened as an ordinary payload.
+      ...(context.purpose === undefined ? {} : { pur: context.purpose }),
     }),
   );
 }

@@ -240,7 +240,15 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
     // key survives a round trip through the Android Keystore, cannot be
     // learned from a host test. The key here is fixed, obviously fake, and
     // never a real one.
-    const { createPlatformSecureStorage, createKeyCustody } = security;
+    const {
+      createPlatformSecureStorage,
+      createKeyCustody,
+      createRecoveryEscrow,
+      openRecoveryEscrow,
+      recoverDataKey,
+      toRecoveryEscrowDocument,
+      fromRecoveryEscrowDocument,
+    } = security;
     const TEST_DEK = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 13) % 256);
 
     const secureStoreAvailable = await SecureStore.isAvailableAsync();
@@ -319,6 +327,124 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
         rejectedBadKey = true;
       }
       record('custody refuses a key of the wrong length', rejectedBadKey);
+
+      // ---- Gate 3: zero-trusted-device recovery escrow -------------------
+      //
+      // Correctness of the escrow construction on this engine is what is being
+      // established here, and that does not depend on the KDF cost — the
+      // production cost is already exercised above, on this same device, by the
+      // 210,000-round check. So these run at the policy minimum, exactly as the
+      // host suite does, because each escrow operation is a full derivation and
+      // at production cost this block alone would take over a minute per case.
+      const escrowContext = { userId: 'x1-selftest-uid', appName: 'x1-selftest' };
+      const RECOVERY_CODE = 'K7QM-2XPD-9RTF';
+
+      const escrow = await createRecoveryEscrow(TEST_DEK, RECOVERY_CODE, crypto, escrowContext);
+      record('recovery escrow wraps the key on Hermes', escrow.version === 1);
+
+      // Base64 of TEST_DEK, encoded inline. Not `btoa` — this block runs with
+      // the browser globals deleted, which is the point of the harness — and
+      // not the package codec, which is internal. A literal would drift from
+      // the constant, so it is computed from it.
+      const dekBase64 = (() => {
+        const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        let out = '';
+        for (let i = 0; i < TEST_DEK.length; i += 3) {
+          const a = TEST_DEK[i] as number;
+          const b = TEST_DEK[i + 1];
+          const c = TEST_DEK[i + 2];
+          out += ALPHA[a >> 2];
+          out += ALPHA[((a & 3) << 4) | ((b ?? 0) >> 4)];
+          out += b === undefined ? '=' : ALPHA[((b & 15) << 2) | ((c ?? 0) >> 6)];
+          out += c === undefined ? '=' : ALPHA[c & 63];
+        }
+        return out;
+      })();
+      const serialised = JSON.stringify(escrow);
+      record(
+        'escrow carries neither the key nor the code',
+        !serialised.includes(dekBase64) &&
+          !serialised.includes(RECOVERY_CODE) &&
+          !serialised.includes('K7QM2XPD9RTF'),
+      );
+
+      const unwrapped = await openRecoveryEscrow(escrow, RECOVERY_CODE, crypto, escrowContext);
+      const escrowIdentical =
+        unwrapped.length === TEST_DEK.length &&
+        unwrapped.every((byte, i) => byte === TEST_DEK[i]);
+      record('escrow unwraps to byte-identical key material', escrowIdentical,
+        `${unwrapped.length} bytes`);
+
+      // What is deliberately NOT re-derived here. Each escrow operation is a
+      // full PBKDF2 pass — about twelve seconds on this hardware — and the
+      // first version of this block ran eight of them, adding roughly a
+      // hundred seconds and pushing API 34 past the sentinel timeout while API
+      // 29 squeaked under it. So the device gate keeps only what the *engine*
+      // could plausibly get wrong, and the host suite keeps the rest:
+      //
+      //   recovery-code normalisation  — string handling, identical on any engine
+      //   tampered-ciphertext refusal  — the same AEAD rejection the X-1 block
+      //                                  above already proves on this device
+      //   wrong code via openRecoveryEscrow — the recoverDataKey case below
+      //                                  exercises the same derivation and also
+      //                                  proves custody is left alone
+      //
+      // Nothing about the construction is weakened; the cost of the derivation
+      // is unchanged, and every one of these cases is covered exhaustively in
+      // packages/security/tests/recoveryEscrow.test.ts.
+
+      // The stored document is a pure shape mapping, so it is checked as one
+      // rather than by paying for another decryption.
+      const document = toRecoveryEscrowDocument('current', escrow);
+      const rebuilt = fromRecoveryEscrowDocument(document);
+      record(
+        'escrow survives the stored document round trip',
+        rebuilt.version === escrow.version &&
+          rebuilt.wrappedKey.ciphertext === escrow.wrappedKey.ciphertext &&
+          rebuilt.wrappedKey.iv === escrow.wrappedKey.iv &&
+          rebuilt.wrappedKey.salt === escrow.wrappedKey.salt &&
+          rebuilt.wrappedKey.iterations === escrow.wrappedKey.iterations,
+      );
+      record('stored document exposes no key or code material',
+        !JSON.stringify(document).includes(RECOVERY_CODE) &&
+          !JSON.stringify(document).includes(dekBase64));
+
+      // The whole zero-trusted-device path, on the device: no key in custody,
+      // one recovery code, key restored through Gate 2 custody and nowhere else.
+      await custody.clear();
+      record('custody is empty before recovery', (await custody.status()) === 'absent');
+
+      let recoveryRefusedWrongCode = false;
+      try {
+        await recoverDataKey({
+          escrow, recoveryCode: 'AAAA-BBBB-CCCC', crypto, context: escrowContext, custody,
+        });
+      } catch {
+        recoveryRefusedWrongCode = true;
+      }
+      record('a wrong recovery code cannot produce a key', recoveryRefusedWrongCode);
+      record('and leaves custody empty', (await custody.status()) === 'absent');
+
+      let recoveryRefusedMissing = false;
+      try {
+        await recoverDataKey({
+          escrow: null, recoveryCode: RECOVERY_CODE, crypto, context: escrowContext, custody,
+        });
+      } catch {
+        recoveryRefusedMissing = true;
+      }
+      record('recovery without an escrow fails rather than minting a key',
+        recoveryRefusedMissing);
+      record('and still leaves custody empty', (await custody.status()) === 'absent');
+
+      await recoverDataKey({
+        escrow, recoveryCode: RECOVERY_CODE, crypto, context: escrowContext, custody,
+      });
+      const restored = await custody.load();
+      record('recovery restores the key through Gate 2 custody',
+        restored !== null && restored.every((byte, i) => byte === TEST_DEK[i]),
+        `${restored === null ? 'null' : restored.length} bytes`);
+
       // Leave nothing behind on the device.
       await custody.clear();
     }

@@ -68,6 +68,19 @@ export {
   remainingRecoveryCodes,
 } from './recoveryCodes';
 export {
+  type RecoveryEscrowEnvelope,
+  type RecoverDataKeyOptions,
+  RECOVERY_ESCROW_PURPOSE,
+  RECOVERY_ESCROW_VERSION,
+  assertRecoveryEscrowEnvelope,
+  createRecoveryEscrow,
+  openRecoveryEscrow,
+  recoverDataKey,
+  type RecoveryEscrowDocument,
+  toRecoveryEscrowDocument,
+  fromRecoveryEscrowDocument,
+} from './recoveryEscrow';
+export {
   type PassphrasePolicy,
   type PassphraseIssue,
   type PassphraseAssessment,
