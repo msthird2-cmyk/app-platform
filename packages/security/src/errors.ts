@@ -31,6 +31,16 @@ export const SecurityErrorCode = {
    * the Android startup failure this code was added for unreadable.
    */
   SECURE_STORAGE_MISCONFIGURED: 'SECURE_STORAGE_MISCONFIGURED',
+  /** A stored record envelope is not one this system wrote. */
+  RECORD_ENVELOPE_INVALID: 'RECORD_ENVELOPE_INVALID',
+  /**
+   * A stored record carries no envelope at all. Never treated as "plaintext is
+   * fine": returning the document as-is would be the silent plaintext fallback
+   * the architecture forbids, and it is the attacker's easiest move.
+   */
+  RECORD_NOT_ENCRYPTED: 'RECORD_NOT_ENCRYPTED',
+  /** No data encryption key is available, so nothing can be read or written. */
+  DATA_KEY_UNAVAILABLE: 'DATA_KEY_UNAVAILABLE',
   /**
    * The escrow document is not one this system wrote — wrong shape, wrong
    * field types, or a wrapped key of the wrong size once opened. Distinct from

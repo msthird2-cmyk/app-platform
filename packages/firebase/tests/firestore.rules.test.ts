@@ -14,7 +14,7 @@ import {
   collectionGroup,
   getDocs,
 } from 'firebase/firestore';
-import { ALICE, BOB, createTestEnvironment, record, unverified, verified } from './helpers';
+import { ALICE, BOB, createTestEnvironment, envelope, record, unverified, verified } from './helpers';
 
 let env: RulesTestEnvironment;
 
@@ -469,36 +469,40 @@ describe('reserved security fields', () => {
   // a denylist that caught substrings would break every legitimate field whose
   // name merely contains one of these words.
   describe('legitimate writes still succeed', () => {
-    it('allows an ordinary domain record on create and update', async () => {
+    it('allows an ordinary record on create and update', async () => {
+      // After X-2 an ordinary record is metadata plus a sealed payload; the
+      // domain fields this used to carry now live inside `enc`.
       const db = verified(env, ALICE).firestore();
       await assertSucceeds(
         setDoc(doc(db, `users/${ALICE}/assets/a1`), {
-          ...record('a1', { name: 'Savings', amount: 1000 }),
+          ...record('a1'),
           updatedAt: serverTimestamp(),
         }),
       );
       await assertSucceeds(
         setDoc(doc(db, `users/${ALICE}/assets/a1`), {
-          ...record('a1', { revision: 2, name: 'Savings', amount: 2000 }),
+          ...record('a1', { revision: 2, enc: envelope({ ct: 'BBBBBBBBBBBBBBBBBBBB' }) }),
           updatedAt: serverTimestamp(),
         }),
       );
     });
 
-    it('allows domain fields whose names merely contain a reserved word', async () => {
+    it('still allows names merely containing a reserved word where a denylist applies', async () => {
+      // Record collections now use an allowlist, so this case moved to the
+      // paths that still use `hasNoReservedFields` as their only field check.
+      // The denylist must keep matching whole keys rather than substrings.
       const db = verified(env, ALICE).firestore();
-      await assertSucceeds(
-        setDoc(doc(db, `users/${ALICE}/assets/a2`), {
-          ...record('a2', {
+      for (const path of [`users/${ALICE}/devices/d1`, `users/${ALICE}/settings/s1`]) {
+        await assertSucceeds(
+          setDoc(doc(db, path), {
             userIdentifier: 'not-a-uid',
             planName: 'Retirement plan',
             roleDescription: 'primary residence',
             adminNotes: 'reviewed',
             permissionsNote: 'n/a',
           }),
-          updatedAt: serverTimestamp(),
-        }),
-      );
+        );
+      }
     });
 
     it('allows an ordinary device document and still allows deleting it', async () => {
@@ -559,6 +563,118 @@ describe('reserved security fields', () => {
       await assertFails(getDocs(collectionGroup(db, 'devices')));
       await assertFails(getDocs(collectionGroup(db, 'settings')));
     });
+  });
+});
+
+/**
+ * X-2: record documents must carry the encrypted envelope.
+ *
+ * This is the tightening `hasNoReservedFields` deferred until the envelope
+ * existed. A plaintext domain field is no longer a reserved name to be listed
+ * and denied — it simply is not one of the fields a record may have.
+ */
+describe('encrypted record envelope', () => {
+  const PATH = `users/${ALICE}/assets/a1`;
+
+  it('rejects a record with no envelope at all', async () => {
+    const db = verified(env, ALICE).firestore();
+    await assertFails(
+      setDoc(doc(db, PATH), {
+        id: 'a1', revision: 1, deletedAt: null, updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('rejects a plaintext domain record, which is the whole point', async () => {
+    const db = verified(env, ALICE).firestore();
+    await assertFails(
+      setDoc(doc(db, PATH), {
+        id: 'a1', revision: 1, deletedAt: null, updatedAt: serverTimestamp(),
+        name: 'Savings', amount: 1000,
+      }),
+    );
+  });
+
+  it('rejects a domain field smuggled alongside a valid envelope', async () => {
+    const db = verified(env, ALICE).firestore();
+    await assertFails(
+      setDoc(doc(db, PATH), {
+        ...record('a1', { name: 'Savings' }), updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertFails(
+      setDoc(doc(db, PATH), {
+        ...record('a1', { amount: 1000 }), updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('rejects a malformed envelope', async () => {
+    const db = verified(env, ALICE).firestore();
+    const bad: Array<Record<string, unknown>> = [
+      { v: 2, alg: 'AES-GCM', iv: 'AA', ct: 'AA' },
+      { v: 1, alg: 'AES-CBC', iv: 'AA', ct: 'AA' },
+      { v: 1, alg: 'AES-GCM', iv: 42, ct: 'AA' },
+      { v: 1, alg: 'AES-GCM', iv: 'AA', ct: null },
+      { v: 1, alg: 'AES-GCM', iv: 'AA' },
+      { v: 1, alg: 'AES-GCM', ct: 'AA' },
+      // No room for anything that could verify a guess or leak a hint.
+      { v: 1, alg: 'AES-GCM', iv: 'AA', ct: 'AA', digest: 'abc' },
+      { v: 1, alg: 'AES-GCM', iv: 'AA', ct: 'AA', hint: 'my cat' },
+    ];
+    for (const enc of bad) {
+      await assertFails(
+        setDoc(doc(db, PATH), { ...record('a1'), enc, updatedAt: serverTimestamp() }),
+        JSON.stringify(enc),
+      );
+    }
+  });
+
+  it('rejects an envelope that is not a map', async () => {
+    const db = verified(env, ALICE).firestore();
+    for (const enc of ['a string', 42, null, ['a']]) {
+      await assertFails(
+        setDoc(doc(db, PATH), { ...record('a1'), enc, updatedAt: serverTimestamp() }),
+        String(enc),
+      );
+    }
+  });
+
+  it('rejects an update that strips the envelope from a sealed record', async () => {
+    const db = verified(env, ALICE).firestore();
+    await assertSucceeds(
+      setDoc(doc(db, PATH), { ...record('a1'), updatedAt: serverTimestamp() }),
+    );
+    await assertFails(
+      setDoc(doc(db, PATH), {
+        id: 'a1', revision: 2, deletedAt: null, updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('still enforces every protection it had before', async () => {
+    // The envelope requirement is additive. Ownership, verification, the
+    // server clock, the revision floor and the reserved names all still hold.
+    const bob = verified(env, BOB).firestore();
+    await assertFails(
+      setDoc(doc(bob, PATH), { ...record('a1'), updatedAt: serverTimestamp() }),
+    );
+
+    const unverifiedAlice = unverified(env, ALICE).firestore();
+    await assertFails(
+      setDoc(doc(unverifiedAlice, PATH), { ...record('a1'), updatedAt: serverTimestamp() }),
+    );
+
+    const db = verified(env, ALICE).firestore();
+    await assertFails(
+      setDoc(doc(db, PATH), { ...record('a1'), updatedAt: new Date(0) }),
+    );
+    await assertFails(
+      setDoc(doc(db, PATH), { ...record('a1', { role: 'admin' }), updatedAt: serverTimestamp() }),
+    );
+    await assertFails(
+      setDoc(doc(db, PATH), { ...record('a1', { revision: 0 }), updatedAt: serverTimestamp() }),
+    );
   });
 });
 

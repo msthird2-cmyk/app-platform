@@ -30,7 +30,19 @@ export async function createTestEnvironment(): Promise<RulesTestEnvironment> {
   });
 }
 
-/** A record as the repository writes it, with a server timestamp placeholder. */
+/**
+ * A sealed record envelope, shaped exactly as `EncryptingRepository` writes it.
+ * The values are obviously fake; the rules only check shape.
+ */
+export function envelope(extra: Record<string, unknown> = {}) {
+  return { v: 1, alg: 'AES-GCM', iv: 'AAAAAAAAAAAAAAAA', ct: 'AAAAAAAAAAAAAAAAAAAA', ...extra };
+}
+
+/**
+ * A record as the repository writes it after X-2: sync metadata and a sealed
+ * payload, with a server timestamp placeholder. Domain fields do not appear
+ * because they are inside `enc`.
+ */
 export function record(id: string, extra: Record<string, unknown> = {}) {
-  return { id, revision: 1, deletedAt: null, ...extra };
+  return { id, revision: 1, deletedAt: null, enc: envelope(), ...extra };
 }
