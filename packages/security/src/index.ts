@@ -141,3 +141,36 @@ export {
   createRecordCipher,
   type CreateRecordCipherOptions,
 } from './services/createRecordCipher';
+export {
+  type KeyAgreement,
+  type EphemeralKeyPair,
+  P256KeyAgreement,
+  PUBLIC_KEY_BYTES,
+  PRIVATE_KEY_BYTES,
+} from './services/KeyAgreement';
+export {
+  verificationCode,
+  commitToPublicKey,
+  commitmentMatches,
+  VERIFICATION_CODE_DOMAIN,
+  COMMITMENT_DOMAIN,
+  type VerificationCodeContext,
+} from './crypto/verificationCode';
+export {
+  type PairingSessionDocument,
+  type PairingEnvelope,
+  type PairingState,
+  type PairingContext,
+  type PairingOffer,
+  type PairingAcceptance,
+  type PairingAgreement,
+  PAIRING_VERSION,
+  DEFAULT_PAIRING_TTL_MS,
+  assertPairingSession,
+  pairingState,
+  createPairingOffer,
+  acceptPairing,
+  derivePairingAgreement,
+  wrapDataKeyForPairing,
+  completePairing,
+} from './pairing';
