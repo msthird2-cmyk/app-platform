@@ -80,6 +80,34 @@ service cloud.firestore {
         && request.resource.data.revision > 0;
     }
 
+    // X-2: a record's domain fields are sealed before they reach here, so the
+    // document carries an envelope and nothing else of substance. Requiring it
+    // is what stops a client — or a future bug above this layer — from writing
+    // a plaintext record that the rules would otherwise happily accept.
+    //
+    // The shape is checked, not just the presence: `ct` and `iv` are the
+    // ciphertext and nonce, `v` and `alg` are covered by the authentication tag
+    // and so cannot be edited to change how the payload is read. There is
+    // deliberately no digest or checksum field, here or in the writer.
+    function hasRecordEnvelope() {
+      return 'enc' in request.resource.data
+        && request.resource.data.enc.keys().hasOnly(['v', 'alg', 'iv', 'ct'])
+        && request.resource.data.enc.v == 1
+        && request.resource.data.enc.alg == 'AES-GCM'
+        && request.resource.data.enc.iv is string
+        && request.resource.data.enc.ct is string;
+    }
+
+    // The only fields a record document may carry: the sync metadata the rules
+    // and queries read, plus the sealed payload. An allowlist rather than a
+    // denylist, which is the tightening `hasNoReservedFields` deferred until
+    // the encrypted envelope existed — a plaintext domain field is now not a
+    // reserved name to be listed, it is simply not permitted.
+    function hasOnlyRecordFields() {
+      return request.resource.data.keys()
+        .hasOnly(['id', 'revision', 'updatedAt', 'deletedAt', 'enc']);
+    }
+
     function isCreatingRecord(docId) {
       return hasValidIdentity(docId)
         && hasServerTimestamp()
@@ -103,10 +131,12 @@ service cloud.firestore {
       allow get, list: if isOwner(uid) && isRecordCollection(collection);
       allow create: if isOwner(uid) && isVerified()
                     && isRecordCollection(collection) && isCreatingRecord(docId)
-                    && hasNoReservedFields();
+                    && hasNoReservedFields()
+                    && hasRecordEnvelope() && hasOnlyRecordFields();
       allow update: if isOwner(uid) && isVerified()
                     && isRecordCollection(collection) && isUpdatingRecord(docId)
-                    && hasNoReservedFields();
+                    && hasNoReservedFields()
+                    && hasRecordEnvelope() && hasOnlyRecordFields();
       // Hard delete is permitted only so account deletion can remove the
       // subtree; ordinary removal goes through the tombstone above.
       allow delete: if isOwner(uid) && isRecordCollection(collection);
