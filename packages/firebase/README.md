@@ -68,3 +68,16 @@ Device verification fails closed with `DEVICE_VERIFICATION_UNAVAILABLE`: issuing
 ```
 pnpm --filter @platform/firebase test
 ```
+
+## Composition
+
+`createFirebaseBackend(app, { collections })` builds the auth, account, backup,
+repository, recovery-escrow and pairing-relay implementations together, from one
+`FirebaseApp`, with every path anchored to `auth.currentUser.uid`.
+
+It is not a production entry point and does not make any application talk to
+Firestore: the three applications still wire the in-memory services in their own
+`index.tsx`, and switching one over is an application-level change with its own
+configuration and App Check posture. What this removes is the reason there was
+no wiring — six services that all need the same app and the same user, now
+constructed consistently in one place.

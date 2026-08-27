@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AppText, Button, Loading, Screen, TextField } from '@platform/ui';
-import type { DataKeyLifecycle, DataKeyState } from '@platform/security';
+import type { DataKeyLifecycle, DataKeyState, PairingRole, PairingSession } from '@platform/security';
 import { dataKeyStep } from './dataKeyStep';
+import { PairDeviceProvider } from './PairDeviceContext';
+import { PairingFlow } from './PairingFlow';
 
 /**
  * Where the data encryption key enters the application's life.
@@ -23,6 +25,15 @@ export interface DataKeyGateProps {
   children: ReactNode;
   /** Lets an application substitute its own copy. */
   labels?: Partial<DataKeyGateLabels>;
+  /**
+   * Builds a pairing session for a role, or is absent.
+   *
+   * Absent means no relay was wired, and then no pairing is offered anywhere —
+   * neither beside the recovery code nor on the trusted-device path. A button
+   * that started something the application cannot finish would be worse than no
+   * button.
+   */
+  pairingSessionFor?: ((role: PairingRole) => PairingSession) | undefined;
 }
 
 export interface DataKeyGateLabels {
@@ -40,6 +51,7 @@ export interface DataKeyGateLabels {
   recoverFailed: string;
   unusableTitle: string;
   unusableBody: string;
+  pairInsteadAction: string;
 }
 
 const DEFAULT_LABELS: DataKeyGateLabels = {
@@ -69,15 +81,22 @@ const DEFAULT_LABELS: DataKeyGateLabels = {
     + 'a change to the device lock screen. Sign in on another device, or use '
     + 'your recovery code there. Setting up again here would permanently orphan '
     + 'your existing records, so this app will not do it automatically.',
+  pairInsteadAction: 'Use another signed-in device',
 };
 
-export function DataKeyGate({ lifecycle, children, labels }: DataKeyGateProps) {
+export function DataKeyGate({
+  lifecycle,
+  children,
+  labels,
+  pairingSessionFor,
+}: DataKeyGateProps) {
   const text = { ...DEFAULT_LABELS, ...labels };
   const [state, setState] = useState<DataKeyState | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [entered, setEntered] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [pairingRole, setPairingRole] = useState<PairingRole | null>(null);
 
   const refresh = useCallback(async () => {
     setState(await lifecycle.status());
@@ -124,7 +143,19 @@ export function DataKeyGate({ lifecycle, children, labels }: DataKeyGateProps) {
     }
   }, [lifecycle, entered, refresh]);
 
-  const step = dataKeyStep(state, recoveryCode);
+  // Built once per attempt. A new session means new ephemeral keys, which is
+  // what starting again has to mean.
+  const pairingSession = useMemo(
+    () => (pairingSessionFor && pairingRole ? pairingSessionFor(pairingRole) : null),
+    [pairingSessionFor, pairingRole],
+  );
+
+  const endPairing = useCallback(() => {
+    setPairingRole(null);
+    void refresh();
+  }, [refresh]);
+
+  const step = dataKeyStep(state, recoveryCode, pairingRole === 'responder');
 
   if (step === 'show-code' && recoveryCode !== null) {
     return (
@@ -171,7 +202,23 @@ export function DataKeyGate({ lifecycle, children, labels }: DataKeyGateProps) {
         />
         {failed ? <AppText tone="down">{text.recoverFailed}</AppText> : null}
         <Button label={text.recoverAction} onPress={() => void runRecovery()} disabled={busy} />
+        {/* An explicit second path, never an automatic fallback in either
+            direction: a failed recovery does not start pairing, and a failed
+            pairing does not consume the recovery code. */}
+        {pairingSessionFor ? (
+          <Button
+            label={text.pairInsteadAction}
+            variant="secondary"
+            onPress={() => setPairingRole('responder')}
+          />
+        ) : null}
       </Screen>
+    );
+  }
+
+  if (step === 'pair' && pairingSession) {
+    return (
+      <PairingFlow session={pairingSession} onComplete={endPairing} onCancel={endPairing} />
     );
   }
 
@@ -184,5 +231,23 @@ export function DataKeyGate({ lifecycle, children, labels }: DataKeyGateProps) {
     );
   }
 
-  return <>{children}</>;
+  // The trusted-device path. This device holds the key, so it is the one that
+  // can give a copy to another; the initiator flow replaces the application
+  // while it runs, and hands back to it either way.
+  if (pairingSession && pairingRole === 'initiator') {
+    return (
+      <PairingFlow session={pairingSession} onComplete={endPairing} onCancel={endPairing} />
+    );
+  }
+
+  return (
+    <PairDeviceProvider
+      value={{
+        available: pairingSessionFor !== undefined,
+        begin: () => setPairingRole('initiator'),
+      }}
+    >
+      {children}
+    </PairDeviceProvider>
+  );
 }

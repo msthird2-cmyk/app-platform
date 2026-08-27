@@ -105,6 +105,9 @@ const PORTABLE_ENTRIES = [
   'packages/security/src/pairing.ts',
   'packages/security/src/services/KeyAgreement.ts',
   'packages/security/src/crypto/verificationCode.ts',
+  // Gate 4 integration: the orchestration runs there too, and reaches the
+  // lifecycle and the escrow through it.
+  'packages/security/src/pairingSession.ts',
 ].map((path) => join(ROOT, path));
 const BROWSER_GLOBALS = [
   { pattern: /\bcrypto\s*\.\s*subtle\b/, name: 'crypto.subtle' },
@@ -280,6 +283,74 @@ for (const file of sources) {
       `${path} writes a verification verdict. A verdict a client can write is a ` +
         'verdict an attacker can write; pairing is authorised by the key agreement.',
     );
+  }
+}
+
+// Nothing on the pairing integration path may create a data encryption key.
+//
+// This is the invariant a pairing integration is most likely to break, and it
+// breaks quietly: a failed adoption is exactly the moment at which "just set
+// one up then" looks like recovery rather than like silently orphaning every
+// record encrypted under the key the user already had. There is no legitimate
+// reason for any of these files to name a generator, so naming one fails.
+const PAIRING_INTEGRATION = [
+  'packages/security/src/pairingSession.ts',
+  'packages/security/src/services/InMemoryPairingRelay.ts',
+  'packages/core/src/PairingFlow.tsx',
+  'packages/core/src/pairingStep.ts',
+  'packages/core/src/PairDeviceContext.tsx',
+].map((path) => join(ROOT, path));
+
+const KEY_CREATION = [
+  { pattern: /\bdrawRandomBytes\b/, name: 'a key generator' },
+  { pattern: /\.\s*initialize\s*\(/, name: 'first-time key setup' },
+  { pattern: /\bgenerateRecoveryCode\b|\bcreateRecoveryEscrow\b/, name: 'recovery-code setup' },
+  { pattern: /\.\s*recover\s*\(/, name: 'the recovery path' },
+];
+for (const file of PAIRING_INTEGRATION) {
+  if (!existsSync(file)) {
+    failures.push(`${relative(ROOT, file)} is missing — the pairing key-creation guard cannot run.`);
+    continue;
+  }
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const { pattern, name } of KEY_CREATION) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${relative(ROOT, file)} reaches ${name} on the pairing path. Pairing transfers ` +
+          'the key that already exists; a failure must leave both devices unchanged.',
+      );
+    }
+  }
+}
+
+// No cryptography inside a React component.
+//
+// The pairing screens subscribe to a session and render what a pure decision
+// function tells them to. A key agreement, a derivation or an envelope opened
+// in a component would put key material into render state, where a re-render,
+// a devtools inspection or an error boundary can reach it.
+const CRYPTO_IN_COMPONENTS = [
+  { pattern: /\bderiveTransportKey\b|\bgetSharedSecret\b|\bP256KeyAgreement\b/, name: 'a key agreement' },
+  { pattern: /\bhkdf\s*\(|\bpbkdf2\b|\bgcm\s*\(|subtle\s*\.\s*\w+/, name: 'a primitive' },
+  {
+    pattern:
+      /\bwrapDataKeyForPairing\b|\bcompletePairing\b|\bderivePairingAgreement\b|\bacceptPairing\b|\bcreatePairingOffer\b/,
+    name: 'a protocol step',
+  },
+  { pattern: /\bcommitToPublicKey\b|\bverificationCode\b|\bcommitmentMatches\b/, name: 'the verification code' },
+];
+for (const file of sources.filter((f) => {
+  const path = relative(ROOT, f);
+  return path.startsWith('packages/core/src/') && path.endsWith('.tsx');
+})) {
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const { pattern, name } of CRYPTO_IN_COMPONENTS) {
+    if (pattern.test(code)) {
+      failures.push(
+        `${relative(ROOT, file)} performs ${name} in a component. The protocol runs in ` +
+          '@platform/security; components render what a decision function returns.',
+      );
+    }
   }
 }
 

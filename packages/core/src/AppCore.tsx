@@ -1,6 +1,14 @@
 import { useMemo, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from '@platform/auth';
-import type { DataKeyLifecycle, RecordCipher } from '@platform/security';
+import { createPairingSession } from '@platform/security';
+import type {
+  DataKeyLifecycle,
+  PairingRelay,
+  PairingRole,
+  PairingSession,
+  RandomBytes,
+  RecordCipher,
+} from '@platform/security';
 import { ThemeProvider, type ThemePreference } from '@platform/theme';
 import { Loading } from '@platform/ui';
 import { ServicesProvider, type PlatformServices } from './ServicesProvider';
@@ -29,18 +37,36 @@ export interface AppCoreProps extends Omit<PlatformServices, 'config'> {
    * the injected repository stores them.
    */
   recordCipher?: RecordCipher | undefined;
+  /**
+   * The pairing transport. Firestore in production; absent in a preview, and
+   * then trusted-device pairing is not offered anywhere in the application.
+   *
+   * Supplied together with `dataKeyLifecycleFor`, `recordCipher` and
+   * `randomBytes`: pairing needs a key to share, a cipher to wrap it with and
+   * entropy for the ephemeral key, and offering it without all four would be a
+   * button that cannot finish what it starts.
+   */
+  pairingRelay?: PairingRelay | undefined;
+  /** The platform CSPRNG, injected by the entry point as everywhere else. */
+  randomBytes?: RandomBytes | undefined;
 }
 
 function AuthGate({
+  appName,
   children,
   signedOut,
   dataKeyLifecycleFor,
   recordCipher,
+  pairingRelay,
+  randomBytes,
 }: {
+  appName: string;
   children: ReactNode;
   signedOut: ReactNode;
   dataKeyLifecycleFor?: ((userId: string) => DataKeyLifecycle) | undefined;
   recordCipher?: RecordCipher | undefined;
+  pairingRelay?: PairingRelay | undefined;
+  randomBytes?: RandomBytes | undefined;
 }) {
   const { user, initializing } = useAuth();
   // Built here rather than in the composition root because the escrow is bound
@@ -52,11 +78,34 @@ function AuthGate({
     [user?.id, dataKeyLifecycleFor],
   );
 
+  /**
+   * The factory the gate uses to open a pairing, or `undefined`.
+   *
+   * Built here for the same reason the lifecycle is: pairing is bound to the
+   * signed-in user, whose identity goes into the transport key's HKDF info and
+   * into the verification code. No cryptography happens in this file — the
+   * session constructs its own key agreement from the injected entropy.
+   */
+  const pairingSessionFor = useMemo<((role: PairingRole) => PairingSession) | undefined>(() => {
+    if (!user || !lifecycle || !pairingRelay || !recordCipher || !randomBytes) return undefined;
+    const userId = user.id;
+    return (role) =>
+      createPairingSession({
+        role,
+        relay: pairingRelay,
+        lifecycle,
+        cipher: recordCipher,
+        randomBytes,
+        userId,
+        appName,
+      });
+  }, [user?.id, lifecycle, pairingRelay, recordCipher, randomBytes, appName]);
+
   if (initializing) return <Loading label="Starting" />;
   if (!user) return <>{signedOut}</>;
   if (!lifecycle) return <>{children}</>;
   return (
-    <DataKeyGate lifecycle={lifecycle}>
+    <DataKeyGate lifecycle={lifecycle} pairingSessionFor={pairingSessionFor}>
       {recordCipher ? (
         // Inside the key gate: by the time this renders, the lifecycle has
         // reported the key ready, so every repository call below has one.
@@ -88,6 +137,8 @@ export function AppCore({
   signedOut,
   dataKeyLifecycleFor,
   recordCipher,
+  pairingRelay,
+  randomBytes,
   ...services
 }: AppCoreProps) {
   const config: AppConfig = featureFlags
@@ -102,9 +153,12 @@ export function AppCore({
       <ServicesProvider config={config} {...services}>
         <AuthProvider service={services.authService}>
           <AuthGate
+            appName={appName}
             signedOut={signedOut}
             dataKeyLifecycleFor={dataKeyLifecycleFor}
             recordCipher={recordCipher}
+            pairingRelay={pairingRelay}
+            randomBytes={randomBytes}
           >
             {children}
           </AuthGate>

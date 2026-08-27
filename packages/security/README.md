@@ -105,3 +105,37 @@ Recovery-code verification is deliberately *not* wired to any storage. Comparing
 ```
 pnpm --filter @platform/security test
 ```
+
+## Trusted-device pairing
+
+`pairing.ts` is the protocol — ephemeral P-256 ECDH, a commitment to the
+initiator's public key, a six-digit code derived from both keys, and the data
+encryption key wrapped under an HKDF transport key. `pairingSession.ts` is the
+orchestration on top of it, split into a pure decision (`pairingProgress`) and a
+driver (`createPairingSession`) that performs the relay I/O the decision asks
+for.
+
+```ts
+const session = createPairingSession({
+  role: 'initiator',            // or 'responder' on the device without a key
+  relay,                        // FirebasePairingRelay in production
+  lifecycle,                    // the DataKeyLifecycle for the signed-in user
+  cipher, randomBytes, userId, appName,
+});
+session.subscribe((view) => render(view.phase, view.code));
+await session.start();          // the responder calls join(sessionId) instead
+await session.confirm();        // only after a person compared the digits
+```
+
+Three properties the API is shaped to keep:
+
+- `PairingSessionView` carries a phase, a session id, six digits and a failure
+  reason. No key material of any kind is on it, so a screen cannot leak one.
+- Confirmation is local. Nothing about it is written to the relay, and there is
+  no `verified` field to write it to.
+- Nothing here creates a key. `exportForPairing` refuses unless one is already
+  in custody; `adoptPairedKey` refuses when custody is `present` *or*
+  `unusable`. Every failure leaves both devices exactly as they were.
+
+`InMemoryPairingRelay` restates the Security Rules' append-only constraints, so
+a driver that passes against it is a driver that works against Firestore.

@@ -249,12 +249,15 @@ Approved design, now **partly implemented**. What exists today:
 | Recovery-code escrow (Gate 3) | implemented — `recoveryEscrow.ts` |
 | DEK lifecycle and persistence | implemented — `dataKeyLifecycle.ts`, `DataKeyGate` |
 | Record encryption (X-2) | implemented — `recordCrypto.ts`, `EncryptingRepository` |
-| Trusted-device pairing | **not implemented** |
+| Trusted-device pairing — protocol and relay (Gate 4) | implemented — `pairing.ts`, `KeyAgreement.ts`, `verificationCode.ts`, `FirebasePairingRelay` |
+| Trusted-device pairing — application integration | implemented — `pairingSession.ts`, `PairingFlow`, `DataKeyGate`; **offered only where a relay is injected** |
+| Production Firebase application wiring | **not done** — `createFirebaseBackend` exists; no application entry point calls it |
 | Optional passphrase wrapper | **not implemented** |
 
 The reasoning behind each rule is in `docs/ARCHITECTURE.md`. The rules below
-still govern the two unimplemented paths, and continue to govern the five that
-exist — they are recorded so that no later step ships a weaker version of them.
+still govern the passphrase wrapper, which does not exist, and continue to
+govern everything that does — they are recorded so that no later step ships a
+weaker version of them.
 
 Domain records are encrypted on the device before they are persisted to
 Firestore. A randomly generated **Data Encryption Key (DEK)** encrypts them, and
@@ -276,18 +279,35 @@ Every path wraps the *same* DEK. None of them is the DEK and none derives it:
 the DEK is random, never a deterministic function of anything the user types. A
 passphrase change rewrites one wrapped copy and re-encrypts no records.
 
-**Multi-device onboarding — trusted-device pairing.** Not yet implemented; until
-it is, a second device can only obtain the DEK through the recovery code, which
-this architecture designates as the exception rather than the normal path. The
-normal way a second device obtains the DEK: an already trusted, unlocked device approves it; both
-sides establish a shared transport key over ECDH; a human-visible verification
-code is shown on both devices and must match; the trusted device transfers the
-DEK wrapped under that transport key. The server relays public keys, pairing
-state and wrapped material only — it never receives the plaintext DEK and never
+**Multi-device onboarding — trusted-device pairing.** Implemented. An already
+trusted, unlocked device approves the new one; both sides establish a shared
+transport key over ephemeral P-256 ECDH; a six-digit verification code is shown
+on both devices and must match; the trusted device transfers the DEK wrapped
+under that transport key. The server relays public keys, pairing progress and
+wrapped material only — it never receives the plaintext DEK and never
 adjudicates the pairing. This is not the client-authoritative device
 verification banned above: the server holds no secret the client could read and
-the client writes no verdict. The NetWorth AI trusted-device ECDH pairing
-implementation is the reference design; do not invent a second mechanism.
+the client writes no verdict.
+
+The initiator publishes **H(its public key)** before the responder reveals
+anything, and opens the commitment afterwards. Without that round a six-digit
+code is not safe — a relay can search for two of its own ephemeral pairs whose
+codes collide, at the birthday bound. Do not remove the commitment, and do not
+invent a second pairing mechanism.
+
+Pairing transfers the key that already exists. It never creates one, on either
+device, in any failure. `packages/security/src/pairingSession.ts` holds the
+orchestration and `scripts/check-architecture.mjs` fails the build if anything
+on that path reaches a key generator, first-time setup or the recovery path.
+
+**Where pairing is offered.** `AppCore` takes an optional `pairingRelay`. With
+one, `DataKeyGate` offers "Use another signed-in device" beside the recovery
+code and `PairNewDeviceButton` renders on the trusted-device path; without one,
+pairing is offered nowhere and a second device uses the recovery code. The three
+preview entry points inject no relay, so **no shipped application performs live
+Firestore pairing today** — `createFirebaseBackend` in `packages/firebase`
+constructs the relay along with the other Firebase services, and switching an
+application onto it is a separate, application-level change.
 
 **Zero-trusted-device recovery.** Implemented (Gate 3). A user who has lost every trusted device
 recovers with their recovery code, which unwraps the DEK **locally**. It is a

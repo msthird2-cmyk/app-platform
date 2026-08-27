@@ -241,6 +241,43 @@ catches what no client-side check could. This is the one place where a human is 
 load-bearing part of the protocol, and it is deliberate; the alternative is a
 trusted server, which Spark does not provide.
 
+A six-digit code is only safe with one addition. A relay that sees both real
+public keys can generate its own ephemeral pairs freely and search for a pair
+whose two codes collide — a birthday-bound search, about a thousand tries for
+six digits, offline. So the initiator publishes a hash of its public key before
+the responder reveals anything and opens the commitment afterwards, as ZRTP and
+Bluetooth secure simple pairing do. The attacker must then fix its key toward
+each side before seeing that side's key, which turns a search into a single
+guess a person watches fail.
+
+**What the integration adds, and what it deliberately does not.** The protocol
+decides whether a transfer is safe; the integration decides when each step
+happens and what a failure means. `pairingSession.ts` splits those apart: a pure
+function maps (role, our key, the relay's snapshot, the person's local decision)
+to a phase and a next action, and a thin driver performs the I/O that function
+asks for. Nothing about the person's confirmation is published — it authorises
+this device to wrap a key or to open one, and that is its whole effect, because
+a field a client writes is a field an attacker writes.
+
+The rule the integration exists to hold is that no failure creates a key. A
+pairing that expires, is cancelled, loses its relay, meets a substituted key or
+receives a corrupted envelope leaves both devices exactly as they were, and the
+user chooses between trying again and using their recovery code. Falling back
+automatically would be worse than useless: on a device whose stored key is
+present but unreadable, generating a replacement orphans every record encrypted
+under the original while appearing to succeed. That is why `adoptPairedKey`
+refuses `unusable` custody as well as `present` custody, and why the
+architecture check fails on a key generator anywhere on the pairing path.
+
+**Where it is available.** Pairing needs a relay, and a relay needs Firestore.
+`AppCore` takes one optionally; without it the flow is not offered anywhere,
+because a button that starts something the application cannot finish is worse
+than no button. `createFirebaseBackend` builds the relay together with the other
+Firebase services, so a production entry point is a few lines — but no
+application entry point calls it today, and each still injects the in-memory
+services. Live Firestore pairing is therefore implemented and unwired, and that
+distinction is stated here rather than glossed.
+
 Recovery is the exception rather than the default because it is the weakest link
 — a single secret that reconstructs everything. Making it routine would mean
 users handling it often, which is how such a secret leaks.

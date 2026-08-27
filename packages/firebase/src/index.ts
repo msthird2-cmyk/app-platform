@@ -5,12 +5,17 @@ export {
   type CreateFirebaseAppOptions,
 } from './app';
 export { ServiceError, isServiceError } from './errors';
+export {
+  createFirebaseBackend,
+  type FirebaseBackend,
+  type FirebaseBackendOptions,
+} from './composition';
 export { FirebaseAuthService } from './services/FirebaseAuthService';
 export { FirebaseRepository } from './services/FirebaseRepository';
 export { FirebaseAccountService } from './services/FirebaseAccountService';
 export { FirebaseBackupService } from './services/FirebaseBackupService';
 export { FirebaseRecoveryEscrowStore } from './services/FirebaseRecoveryEscrowStore';
-export { FirebasePairingRelay, type PairingRelay } from './services/FirebasePairingRelay';
+export { FirebasePairingRelay } from './services/FirebasePairingRelay';
 export {
   AdaptedSecureStorage,
   type AdaptedSecureStorageOptions,

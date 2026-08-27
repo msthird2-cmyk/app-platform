@@ -87,6 +87,8 @@ export {
   type DataKeyLifecycle,
   type DataKeyLifecycleOptions,
   type FirstTimeSetupResult,
+  type PairingExportOptions,
+  type PairingAdoptOptions,
   createDataKeyLifecycle,
 } from './dataKeyLifecycle';
 export {
@@ -174,3 +176,18 @@ export {
   wrapDataKeyForPairing,
   completePairing,
 } from './pairing';
+export {
+  type PairingRole,
+  type PairingPhase,
+  type PairingAction,
+  type PairingFailureReason,
+  type PairingProgress,
+  type PairingProgressInput,
+  type PairingRelay,
+  type PairingSession,
+  type PairingSessionView,
+  type PairingSessionOptions,
+  pairingProgress,
+  createPairingSession,
+} from './pairingSession';
+export { InMemoryPairingRelay } from './services/InMemoryPairingRelay';
