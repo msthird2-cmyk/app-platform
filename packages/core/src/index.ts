@@ -17,6 +17,7 @@ export {
   type DataKeyGateLabels,
 } from './DataKeyGate';
 export { dataKeyStep, type DataKeyStep } from './dataKeyStep';
+export { repositoryForConsumer, isEncryptedRepository } from './repositoryAccess';
 export {
   pairingStep,
   pairingFailureMessage,

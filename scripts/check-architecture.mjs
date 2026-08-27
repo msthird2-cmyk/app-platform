@@ -354,6 +354,105 @@ for (const file of sources.filter((f) => {
   }
 }
 
+// ---- Gate 5: the encryption boundary cannot be wired around ------------
+//
+// Three properties that used to be conventions and are now structural. Each is
+// checked at the exact place a regression would land, because each of them
+// fails the same way if it is lost: an application writes a user's records in
+// the clear and finds out only when Firestore refuses the document — and only
+// then if it is talking to Firestore at all.
+
+// 1. AppCore's encryption wiring is mandatory.
+//
+// `recordCipher` and `dataKeyLifecycleFor` were optional, so a composition root
+// could supply a repository and omit the cipher; AppCore then rendered the
+// application straight over the raw one. Nothing warned, because the two shapes
+// are indistinguishable at that point. Making the pair required removes the
+// combination from the type system, and this stops it coming back.
+const APP_CORE = join(ROOT, 'packages/core/src/AppCore.tsx');
+if (!existsSync(APP_CORE)) {
+  failures.push('packages/core/src/AppCore.tsx is missing — the encryption-wiring guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(APP_CORE, 'utf8'));
+  for (const field of ['recordCipher', 'dataKeyLifecycleFor']) {
+    if (new RegExp(`\\b${field}\\s*\\?\\s*:`).test(code)) {
+      failures.push(
+        `packages/core/src/AppCore.tsx makes ${field} optional. Encryption wiring is ` +
+          'mandatory: a composition that omits it renders the application over the raw repository.',
+      );
+    }
+  }
+  // The provider must not be reachable past a conditional that skips it.
+  if (!/<EncryptedRepositoryProvider/.test(code)) {
+    failures.push(
+      'packages/core/src/AppCore.tsx no longer renders EncryptedRepositoryProvider. ' +
+        'Every signed-in path must pass through the encryption boundary.',
+    );
+  }
+}
+
+// 2. The accessor domain code uses must refuse the raw repository.
+//
+// `EncryptedRepositoryProvider` legitimately reads the unwrapped one — it is
+// the caller whose job is to wrap it — so the check belongs on `useRepository`,
+// which is what every screen calls.
+const SERVICES_PROVIDER = join(ROOT, 'packages/core/src/ServicesProvider.tsx');
+if (!existsSync(SERVICES_PROVIDER)) {
+  failures.push('packages/core/src/ServicesProvider.tsx is missing — the accessor guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(SERVICES_PROVIDER, 'utf8'));
+  if (!/useRepository[\s\S]*?repositoryForConsumer\s*\(/.test(code)) {
+    failures.push(
+      'packages/core/src/ServicesProvider.tsx returns a repository from useRepository() ' +
+        'without repositoryForConsumer(). A screen must never receive the unencrypting store.',
+    );
+  }
+}
+
+// 3. The backup flows require the boundary, in the types and at runtime.
+const BACKUP_FLOW = join(ROOT, 'packages/backup/src/services/backupFlow.ts');
+if (!existsSync(BACKUP_FLOW)) {
+  failures.push('packages/backup/src/services/backupFlow.ts is missing — the backup guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(BACKUP_FLOW, 'utf8'));
+  if (/repository\s*:\s*Repository\b/.test(code)) {
+    failures.push(
+      'packages/backup/src/services/backupFlow.ts accepts a bare Repository. runRestore ' +
+        'writes domain records; given the raw store those fields reach persistence in the clear.',
+    );
+  }
+  const asserts = code.match(/assertEncryptedRepository\s*\(/g) ?? [];
+  if (asserts.length < 2) {
+    failures.push(
+      'packages/backup/src/services/backupFlow.ts does not assert the encryption boundary ' +
+        'in both runBackup and runRestore. The type alone does not survive a cast.',
+    );
+  }
+}
+
+// 4. No application screen or data module reaches persistence directly.
+//
+// The path is screen -> useRepository() -> EncryptingRepository -> whatever is
+// underneath. A screen that imports @platform/firebase, or constructs a
+// repository of its own, has left that path.
+for (const file of sources) {
+  const path = relative(ROOT, file);
+  if (!/^apps\/[^/]+\/src\/(screens|data|domain)\//.test(path)) continue;
+  const code = stripComments(readFileSync(file, 'utf8'));
+  if (/from\s*['"]@platform\/firebase['"]/.test(code)) {
+    failures.push(
+      `${path} imports @platform/firebase. Screens and data modules reach persistence ` +
+        'through useRepository(); only the composition root names a backend.',
+    );
+  }
+  if (/new\s+(?:Firebase|InMemory|Encrypting)Repository\b/.test(code)) {
+    failures.push(
+      `${path} constructs a repository. The one it may use is injected and already ` +
+        'encrypts; constructing another one bypasses the boundary.',
+    );
+  }
+}
+
 const RULES_FILE = join(ROOT, 'firestore.rules');
 if (existsSync(RULES_FILE)) {
   const rules = readFileSync(RULES_FILE, 'utf8').replace(/\/\/[^\n]*/g, '');

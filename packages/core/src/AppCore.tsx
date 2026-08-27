@@ -27,16 +27,20 @@ export interface AppCoreProps extends Omit<PlatformServices, 'config'> {
   /** Rendered when nobody is signed in — usually the application's auth flow. */
   signedOut: ReactNode;
   /**
-   * Builds the data-key lifecycle for a signed-in user. Optional: without it
-   * the application renders as before and no key is ever created.
+   * Builds the data-key lifecycle for a signed-in user.
+   *
+   * **Required, and required together with `recordCipher`.** Both were once
+   * optional, which meant a composition root could hand `AppCore` a repository
+   * and forget the cipher — and then every domain write went to persistence in
+   * the clear. Nothing warned, because nothing could: the two shapes are
+   * indistinguishable to this component. Making the pair mandatory removes the
+   * combination from the type system rather than documenting it as a hazard,
+   * and `scripts/check-architecture.mjs` fails the build if either is made
+   * optional again.
    */
-  dataKeyLifecycleFor?: ((userId: string) => DataKeyLifecycle) | undefined;
-  /**
-   * Encrypts record payloads before they reach the repository. Supplied
-   * together with `dataKeyLifecycleFor`; without both, records are stored as
-   * the injected repository stores them.
-   */
-  recordCipher?: RecordCipher | undefined;
+  dataKeyLifecycleFor: (userId: string) => DataKeyLifecycle;
+  /** Seals record payloads before they reach the repository. Required. */
+  recordCipher: RecordCipher;
   /**
    * The pairing transport. Firestore in production; absent in a preview, and
    * then trusted-device pairing is not offered anywhere in the application.
@@ -63,8 +67,8 @@ function AuthGate({
   appName: string;
   children: ReactNode;
   signedOut: ReactNode;
-  dataKeyLifecycleFor?: ((userId: string) => DataKeyLifecycle) | undefined;
-  recordCipher?: RecordCipher | undefined;
+  dataKeyLifecycleFor: (userId: string) => DataKeyLifecycle;
+  recordCipher: RecordCipher;
   pairingRelay?: PairingRelay | undefined;
   randomBytes?: RandomBytes | undefined;
 }) {
@@ -74,7 +78,7 @@ function AuthGate({
   // does not exist until somebody has signed in. Memoised on the id so a
   // re-render does not construct a second one.
   const lifecycle = useMemo(
-    () => (user && dataKeyLifecycleFor ? dataKeyLifecycleFor(user.id) : null),
+    () => (user ? dataKeyLifecycleFor(user.id) : null),
     [user?.id, dataKeyLifecycleFor],
   );
 
@@ -87,7 +91,7 @@ function AuthGate({
    * session constructs its own key agreement from the injected entropy.
    */
   const pairingSessionFor = useMemo<((role: PairingRole) => PairingSession) | undefined>(() => {
-    if (!user || !lifecycle || !pairingRelay || !recordCipher || !randomBytes) return undefined;
+    if (!user || !lifecycle || !pairingRelay || !randomBytes) return undefined;
     const userId = user.id;
     return (role) =>
       createPairingSession({
@@ -102,23 +106,18 @@ function AuthGate({
   }, [user?.id, lifecycle, pairingRelay, recordCipher, randomBytes, appName]);
 
   if (initializing) return <Loading label="Starting" />;
-  if (!user) return <>{signedOut}</>;
-  if (!lifecycle) return <>{children}</>;
+  if (!user || !lifecycle) return <>{signedOut}</>;
   return (
     <DataKeyGate lifecycle={lifecycle} pairingSessionFor={pairingSessionFor}>
-      {recordCipher ? (
-        // Inside the key gate: by the time this renders, the lifecycle has
-        // reported the key ready, so every repository call below has one.
-        <EncryptedRepositoryProvider
-          userId={user.id}
-          lifecycle={lifecycle}
-          cipher={recordCipher}
-        >
-          {children}
-        </EncryptedRepositoryProvider>
-      ) : (
-        children
-      )}
+      {/*
+        Unconditional. There is no branch here that renders the application
+        over the raw repository, because that branch is what a composition root
+        would fall into by omission. Inside the key gate the lifecycle has
+        already reported the key ready, so every repository call below has one.
+      */}
+      <EncryptedRepositoryProvider userId={user.id} lifecycle={lifecycle} cipher={recordCipher}>
+        {children}
+      </EncryptedRepositoryProvider>
     </DataKeyGate>
   );
 }
