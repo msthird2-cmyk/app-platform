@@ -148,6 +148,14 @@ Enable Firebase App Check where supported. For native builds use an appropriate 
 
 App Check is not authorization and is never the only control. Rules must remain secure if App Check is bypassed.
 
+**Current state: no build enables it.** Net Worth, the one application wired to
+Firebase, passes the documented `provider: 'disabled'` opt-out with a written
+reason rather than omitting the decision. On React Native attestation comes from
+the native Firebase SDK, and the web SDK's reCAPTCHA providers do not apply, so
+satisfying the rule above is native work that has not been done. It is a gap
+against this section, recorded as one — and it costs no authorization, because
+the paragraph above already requires the Rules to hold without it.
+
 ## Authentication
 
 Use Firebase Authentication for identity. Required flows include signup, login, logout, password reset, email verification and recent reauthentication for destructive/sensitive actions.
@@ -300,6 +308,13 @@ misconfiguration rather than quietly starting the in-memory composition — the
 same reasoning as the plaintext fallback this architecture forbids: an
 application that looks like it is working while the data is not where the user
 thinks it is, is worse than one that stops.
+
+It also has not been observed. No project configuration exists in this
+repository or in CI, so what the tests establish is that the production
+composition constructs and that every layer above it runs against a store
+standing exactly where `FirebaseRepository` stands. The network path, the
+Security Rules and the `email_verified` requirement they impose on every record
+write are exercised for the first time by whoever supplies a project.
 
 Recovery is the exception rather than the default because it is the weakest link
 — a single secret that reconstructs everything. Making it routine would mean
