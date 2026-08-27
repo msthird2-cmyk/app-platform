@@ -82,9 +82,24 @@ docs/ARCHITECTURE.md
 | `backup` | `ui`, `theme`, `utils`, `data`, `security` |
 | `firebase` | interfaces/types only from shared packages |
 | `core` | any shared package |
-| `apps/*` | any shared package |
+| `apps/*` | any shared package — but see the note below on `@platform/firebase` |
 
 Nothing in `packages/` imports from `apps/`. `packages/firebase` never imports a component or hook. `core` composes services but contains no app-specific business rules.
+
+**`@platform/firebase` is the one exception to "any shared package".** Naming a
+backend is a composition-root decision, so an application may import it only
+from its entry point, `src/composition/**` or `src/config/**`. A screen, a data
+module or a shared package that imports it has reached past the interfaces it is
+meant to depend on, and in an application that is how a component ends up
+holding a repository that does not encrypt. Enforced in `eslint.config.mjs`, and
+again for screens, data and domain modules in `scripts/check-architecture.mjs`.
+
+Note that rule 2 above bans the Firebase **SDK** — `firebase/*` and
+`@firebase/*` — which is a different question from this package.
+`no-restricted-imports` matches its groups with gitignore semantics rather than
+minimatch, so an unanchored `firebase` pattern silently matches
+`@platform/firebase` too; the SDK patterns are anchored (`/firebase`) to keep
+the two rules distinct.
 
 ## Reusable component architecture
 
@@ -327,6 +342,16 @@ Configuration comes from `EXPO_PUBLIC_*`, inlined by `babel-preset-expo` at
 build time. Nothing is hard-coded and nothing is committed: an unconfigured
 checkout is a preview build. Investment and Expense are deliberately still
 in-memory; converting them is the same shape of change and is not done.
+
+**No live Firebase round trip has been observed.** No project configuration
+exists in this repository or in CI, so what is established is that the
+production composition is constructed and that every layer above it — the
+encryption boundary, the record envelope, the key lifecycle — is exercised
+against a store standing exactly where `FirebaseRepository` stands. Reading and
+writing a real Firestore document, and the `email_verified` requirement the
+record rules impose on every create and update, remain unverified until someone
+supplies a project. Do not describe Net Worth as proven against Firebase on the
+strength of the tests alone.
 
 **App Check is disabled for this build, with a stated reason.**
 `createFirebaseApp` requires the decision either way, so it is recorded rather

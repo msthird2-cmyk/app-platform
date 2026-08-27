@@ -45,6 +45,16 @@ by accident.
 **No configuration is checked in, and no default project exists.** A checkout
 with none of these set is a preview build.
 
+## What has and has not been verified
+
+The production composition is constructed and every layer above it is tested:
+the encryption boundary, the record envelope, the key lifecycle and the pairing
+relay all run against a store standing exactly where `FirebaseRepository`
+stands. **No live Firestore round trip has been performed**, because no project
+configuration exists in this repository or in CI. The first run against a real
+project is the first time the network path, the Security Rules and the
+`email_verified` requirement are exercised together.
+
 ## What a production build does and does not have
 
 - **Records** are encrypted on the device before they reach Firestore, under a
