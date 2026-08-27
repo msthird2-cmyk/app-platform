@@ -32,10 +32,12 @@ const ALL_PACKAGES = [...Object.keys(DEPENDENCIES), 'firebase'];
  * `no-restricted-imports` matches a group with gitignore semantics, not
  * minimatch, so an unanchored `firebase` matches any specifier whose last
  * segment is `firebase` — including `@platform/firebase`, this repository's own
- * service package. That made the rule mean more than its message says and more
- * than the dependency table says: `apps/*` may import any shared package, and a
- * production entry point cannot exist without importing that one. Anchoring
- * leaves the SDK ban exactly as strict and stops it catching the wrapper.
+ * service package. That made the rule mean more than its message says: a
+ * production entry point cannot exist without importing the wrapper, and the
+ * SDK ban is not the rule that governs it. Anchoring leaves the SDK ban exactly
+ * as strict and hands the wrapper to `PLATFORM_FIREBASE_PATTERN` below, which
+ * is where the composition-root exception in CLAUDE.md's dependency table is
+ * actually enforced.
  */
 const FIREBASE_PATTERN = {
   group: ['/firebase', '/firebase/*', '@firebase/*'],
