@@ -183,8 +183,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Filtered on the harness, not on one package it happens to use.
+      #
+      # This was `--filter @platform/security...`, which builds security and
+      # *its* dependencies. The moment the harness imported a second package
+      # that one was not built, its `main` — `dist/index.js` — did not exist,
+      # and Metro resolved the import to nothing. The failure surfaced on the
+      # device as `TypeError: Cannot set property 'importedAll' of undefined`
+      # from Babel's interop helper, which says nothing about a missing build.
+      # Filtering on the harness tracks whatever it depends on from now on.
       - name: Build shared packages
-        run: pnpm turbo build --filter @platform/security...
+        run: pnpm turbo build --filter @tools/x1-selftest...
 
       # `android/` is gitignored and generated here, so the committed tree stays
       # a managed Expo project and CI builds the same way a developer would.
