@@ -13,6 +13,7 @@
   "dependencies": {
     "@babel/runtime": "^7.26.0",
     "@expo/metro-runtime": "~4.0.1",
+    "@platform/data": "workspace:*",
     "@platform/security": "workspace:*",
     "expo": "~52.0.20",
     "expo-asset": "~11.0.5",

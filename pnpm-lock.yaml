@@ -458,6 +458,9 @@ importers:
       '@expo/metro-runtime':
         specifier: ~4.0.1
         version: 4.0.1(react-native@0.76.9(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@types/react@18.3.31)(react@18.3.1))
+      '@platform/data':
+        specifier: workspace:*
+        version: link:../../packages/data
       '@platform/security':
         specifier: workspace:*
         version: link:../../packages/security
