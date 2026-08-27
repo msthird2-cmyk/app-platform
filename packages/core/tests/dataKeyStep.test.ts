@@ -49,3 +49,39 @@ describe('dataKeyStep', () => {
     }
   });
 });
+
+/**
+ * The pairing branch is an alternative to typing a recovery code, and nothing
+ * more. The two states where choosing it would be destructive are the two it
+ * must not reach.
+ */
+describe('dataKeyStep — trusted-device pairing', () => {
+  it('offers pairing instead of the recovery code when the user asks for it', () => {
+    expect(dataKeyStep('needs-recovery', null, true)).toBe('pair');
+  });
+
+  it('leaves recovery as the default, so pairing is never automatic', () => {
+    expect(dataKeyStep('needs-recovery', null, false)).toBe('recover');
+    expect(dataKeyStep('needs-recovery', null)).toBe('recover');
+  });
+
+  it('never routes an unreadable key to pairing', () => {
+    // Adopting a key over one that is stored and cannot be read orphans every
+    // record under the original, exactly as re-running setup would.
+    expect(dataKeyStep('unusable', null, true)).toBe('blocked');
+  });
+
+  it('never routes a first-time device to pairing', () => {
+    // There is no escrow and therefore no other device holding a key. Pairing
+    // here would wait forever for a peer that does not exist.
+    expect(dataKeyStep('needs-setup', null, true)).toBe('setup');
+  });
+
+  it('keeps a freshly generated recovery code ahead of pairing', () => {
+    expect(dataKeyStep('needs-recovery', 'ABCD-EFGH-IJKL', true)).toBe('show-code');
+  });
+
+  it('does not interrupt a ready application', () => {
+    expect(dataKeyStep('ready', null, true)).toBe('ready');
+  });
+});

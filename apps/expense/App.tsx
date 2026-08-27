@@ -1,4 +1,4 @@
-import { AppCore } from '@platform/core';
+import { AppCore, PairNewDeviceButton } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { InMemoryRepository } from '@platform/data';
 import { getRandomBytes } from 'expo-crypto';
@@ -9,7 +9,7 @@ import {
   createRecordCipher,
   InMemoryRecoveryEscrowStore,
 } from '@platform/security';
-import type { RecoveryEscrowStore, SecureStorage } from '@platform/security';
+import type { PairingRelay, RecoveryEscrowStore, SecureStorage } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
 import type { BackupService } from '@platform/backup';
@@ -32,6 +32,12 @@ export interface ExpenseAppProps {
   minimumProtection?: 'os-keystore' | 'browser-nonextractable';
   /** Firestore in production; in-memory here, so a preview is self-contained. */
   escrowStore?: RecoveryEscrowStore;
+  /**
+   * The trusted-device pairing transport. Firestore in production; absent in
+   * this preview, and pairing is then not offered anywhere — a second device
+   * would use the recovery code instead.
+   */
+  pairingRelay?: PairingRelay;
   accountService: AccountService;
   backupService: BackupService;
   now?: Date;
@@ -45,6 +51,7 @@ export default function App({
   now,
   minimumProtection = 'os-keystore',
   escrowStore = new InMemoryRecoveryEscrowStore(),
+  pairingRelay,
 }: ExpenseAppProps) {
   const cryptoService = createCryptoService({ randomBytes: getRandomBytes });
   // AES-256-GCM directly under the data encryption key. No KDF: the key is
@@ -77,6 +84,8 @@ export default function App({
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}
       recordCipher={recordCipher}
+      pairingRelay={pairingRelay}
+      randomBytes={getRandomBytes}
       secureStorage={secureStorage}
       signedOut={
         <LoginScreen
@@ -86,12 +95,17 @@ export default function App({
         />
       }
     >
-      <ExpensesScreen
-        expenses={DEMO_EXPENSES}
-        budgets={DEMO_BUDGETS}
-        month={now ?? DEMO_MONTH}
-        onAddSpend={() => undefined}
-      />
+      <>
+        {/* Renders nothing unless a pairing relay was injected. The trusted
+            device is the one that can give a copy of the key to another. */}
+        <PairNewDeviceButton />
+        <ExpensesScreen
+          expenses={DEMO_EXPENSES}
+          budgets={DEMO_BUDGETS}
+          month={now ?? DEMO_MONTH}
+          onAddSpend={() => undefined}
+        />
+      </>
     </AppCore>
   );
 }

@@ -18,6 +18,20 @@ export {
 } from './DataKeyGate';
 export { dataKeyStep, type DataKeyStep } from './dataKeyStep';
 export {
+  pairingStep,
+  pairingFailureMessage,
+  pairingStartLabel,
+  type PairingUiStep,
+} from './pairingStep';
+export { PairingFlow, type PairingFlowProps, type PairingFlowLabels } from './PairingFlow';
+export {
+  PairDeviceProvider,
+  PairNewDeviceButton,
+  usePairDevice,
+  type PairDevice,
+  type PairNewDeviceButtonProps,
+} from './PairDeviceContext';
+export {
   EncryptedRepositoryProvider,
   type EncryptedRepositoryProviderProps,
 } from './EncryptedRepositoryProvider';

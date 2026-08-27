@@ -64,3 +64,32 @@ Composition only — no application business rules belong here. If a rule is spe
 ```
 pnpm --filter @platform/core test
 ```
+
+## Trusted-device pairing
+
+Pass `pairingRelay` (and `randomBytes`) to `AppCore` and the pairing flow
+becomes available:
+
+```tsx
+<AppCore
+  /* … */
+  dataKeyLifecycleFor={dataKeyLifecycleFor}
+  recordCipher={recordCipher}
+  pairingRelay={firebasePairingRelay}
+  randomBytes={getRandomBytes}
+>
+```
+
+With it, `DataKeyGate` offers "Use another signed-in device" beside the recovery
+code, and `PairNewDeviceButton` renders wherever an application places it on the
+trusted-device path. Without it neither appears, because a button that starts
+something the application cannot finish is worse than no button.
+
+The gate never offers pairing from `unusable` custody, and never falls back
+between pairing and recovery in either direction — both are explicit choices the
+user makes.
+
+`PairingFlow` renders; it does not compute. Every protocol decision is in
+`@platform/security`, and `pairingStep` / `pairingFailureMessage` are pure
+functions this package tests directly, in the absence of component-test
+infrastructure.
