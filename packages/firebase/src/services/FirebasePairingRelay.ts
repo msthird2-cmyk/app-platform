@@ -14,6 +14,7 @@ import { getAuth, type Auth } from 'firebase/auth';
 import type { FirebaseApp } from 'firebase/app';
 import type {
   PairingEnvelope,
+  PairingRelay,
   PairingSessionDocument,
   SecurityErrorCode,
 } from '@platform/security';
@@ -56,21 +57,11 @@ function fromFirestore(data: DocumentData): unknown {
   };
 }
 
-export interface PairingRelay {
-  create(session: PairingSessionDocument): Promise<void>;
-  load(sessionId: string): Promise<unknown | null>;
-  /** The new device publishes its ephemeral public key. */
-  accept(sessionId: string, responderPublicKey: string): Promise<void>;
-  /** The trusted device opens its commitment. */
-  reveal(sessionId: string, initiatorPublicKey: string): Promise<void>;
-  /** The trusted device publishes the wrapped key, after a person confirmed. */
-  confirm(sessionId: string, wrapped: PairingEnvelope): Promise<void>;
-  /** The new device marks the session spent. Single use. */
-  consume(sessionId: string): Promise<void>;
-  /** Both devices watch for the other's step. */
-  watch(sessionId: string, onChange: (session: unknown | null) => void): () => void;
-}
-
+/**
+ * The port itself lives in `@platform/security`, beside the protocol that uses
+ * it, so nothing on the pairing path depends on Firestore. This class is one
+ * implementation of it; `InMemoryPairingRelay` is the other.
+ */
 export class FirebasePairingRelay implements PairingRelay {
   private readonly db: Firestore;
   private readonly auth: Auth;

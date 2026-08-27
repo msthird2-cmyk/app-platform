@@ -1,6 +1,12 @@
 import { drawRandomBytes, type RandomBytes } from './crypto/entropy';
 import { SecurityError, SecurityErrorCode } from './errors';
 import type { KeyCustody } from './keyCustody';
+import {
+  completePairing,
+  wrapDataKeyForPairing,
+  type PairingContext,
+  type PairingEnvelope,
+} from './pairing';
 import { generateRecoveryCode } from './recoveryCodes';
 import {
   createRecoveryEscrow,
@@ -10,6 +16,7 @@ import {
   type RecoveryEscrowDocument,
 } from './recoveryEscrow';
 import type { CryptoService, EncryptionContext } from './types/crypto';
+import type { RecordCipher } from './types/recordCipher';
 
 /**
  * The data encryption key across an application's lifetime.
@@ -62,6 +69,29 @@ export interface FirstTimeSetupResult {
   recoveryCode: string;
 }
 
+/**
+ * What the trusted device needs to hand its key to a new one: a transport key
+ * both devices derived, and the identity that key is bound to.
+ *
+ * The cipher arrives per call rather than at construction because it is the
+ * record cipher the application already built, and the lifecycle has no use for
+ * one otherwise.
+ */
+export interface PairingExportOptions {
+  transportKey: Uint8Array;
+  context: PairingContext;
+  cipher: RecordCipher;
+}
+
+export interface PairingAdoptOptions {
+  /** The relay's snapshot, carrying the wrapped key. */
+  session: unknown;
+  transportKey: Uint8Array;
+  context: PairingContext;
+  cipher: RecordCipher;
+  now: number;
+}
+
 export interface DataKeyLifecycle {
   status(): Promise<DataKeyState>;
   /** The key from custody, or `null` when there is none. Never creates one. */
@@ -70,6 +100,24 @@ export interface DataKeyLifecycle {
   initialize(): Promise<FirstTimeSetupResult>;
   /** Zero-trusted-device recovery. Refuses when a usable key already exists. */
   recover(recoveryCode: string): Promise<Uint8Array>;
+  /**
+   * Wraps the key this device already holds, for a paired device.
+   *
+   * Refuses unless a key is actually in custody. There is no branch here that
+   * creates one: a device with nothing to share has nothing to share, and
+   * generating a key at this moment would mint a second one for a user who
+   * already has records under the first.
+   */
+  exportForPairing(options: PairingExportOptions): Promise<PairingEnvelope>;
+  /**
+   * Opens a key wrapped by a trusted device and takes custody of it.
+   *
+   * Refuses when this device already holds a key, and refuses when it holds one
+   * it cannot read — the second case is the one `completePairing` alone does not
+   * cover, and treating it as "no key" would write over an unreadable key and
+   * orphan every record encrypted under it.
+   */
+  adoptPairedKey(options: PairingAdoptOptions): Promise<Uint8Array>;
 }
 
 const DEFAULT_ESCROW_ID = 'current';
@@ -166,6 +214,47 @@ export function createDataKeyLifecycle(
       // RECOVERY_ESCROW_MISSING rather than falling through to key creation.
       const escrow = await loadEscrow();
       return recoverDataKey({ escrow, recoveryCode, crypto, context, custody });
+    },
+
+    async exportForPairing({ transportKey, context: pairingContext, cipher }) {
+      const custodyStatus = await custody.status();
+      // Distinguished deliberately. "Stored and unreadable" is a device
+      // problem the user must be told about; "nothing stored" means this
+      // device was never the trusted one and should not be offering.
+      if (custodyStatus === 'unusable') {
+        throw new SecurityError(SecurityErrorCode.KEY_CUSTODY_UNUSABLE);
+      }
+      if (custodyStatus !== 'present') {
+        throw new SecurityError(SecurityErrorCode.DATA_KEY_UNAVAILABLE);
+      }
+      const dataKey = await custody.load();
+      if (dataKey === null) throw new SecurityError(SecurityErrorCode.DATA_KEY_UNAVAILABLE);
+      return wrapDataKeyForPairing({
+        dataKey,
+        transportKey,
+        context: pairingContext,
+        cipher,
+      });
+    },
+
+    async adoptPairedKey({ session, transportKey, context: pairingContext, cipher, now }) {
+      const custodyStatus = await custody.status();
+      // `completePairing` refuses `present` too; this is not redundant, because
+      // `unusable` is the case it cannot see and the one that loses data.
+      if (custodyStatus === 'present') {
+        throw new SecurityError(SecurityErrorCode.KEY_CUSTODY_INVALID);
+      }
+      if (custodyStatus === 'unusable') {
+        throw new SecurityError(SecurityErrorCode.KEY_CUSTODY_UNUSABLE);
+      }
+      return completePairing({
+        session,
+        transportKey,
+        context: pairingContext,
+        cipher,
+        custody,
+        now,
+      });
     },
   };
 }
