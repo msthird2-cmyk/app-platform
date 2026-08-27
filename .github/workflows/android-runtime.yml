@@ -16,8 +16,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/security/**'
-      - 'packages/firebase/**'
+      - 'packages/**'
+      - 'apps/**'
       - 'tools/x1-selftest/**'
       - '.github/workflows/android-runtime.yml'
       - 'scripts/check-architecture.mjs'
@@ -26,8 +26,8 @@ on:
       - 'pnpm-lock.yaml'
   pull_request:
     paths:
-      - 'packages/security/**'
-      - 'packages/firebase/**'
+      - 'packages/**'
+      - 'apps/**'
       - 'tools/x1-selftest/**'
       - '.github/workflows/android-runtime.yml'
       - 'scripts/check-architecture.mjs'
@@ -73,8 +73,14 @@ jobs:
       # does not exist in a fresh checkout. Calling the package script directly
       # skipped that build and every suite failed to resolve the import. A local
       # working tree hides this, because the artifacts are already lying around.
-      - name: Security package tests
-        run: pnpm turbo test --filter @platform/security
+      #
+      # Every package, not only @platform/security. The filtered form left the
+      # data-key gate's decisions, the pairing screen's decisions and every
+      # application's domain tests outside CI entirely — and those are exactly
+      # the places where a mistake routes a user to first-time setup instead of
+      # recovery. Turbo caches, so the cost of the other packages is seconds.
+      - name: Package tests
+        run: pnpm turbo test
 
       # ESLint plus the architecture check, which carries the Gate 3 scope
       # guard: X-2 record-encryption symbols, writes to a plaintext key-value
