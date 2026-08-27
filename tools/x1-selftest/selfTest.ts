@@ -251,6 +251,10 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       wrapDataKeyForPairing,
       completePairing,
       commitToPublicKey,
+      createDataKeyLifecycle,
+      createPairingSession,
+      InMemoryPairingRelay,
+      InMemoryRecoveryEscrowStore,
       createRecoveryEscrow,
       openRecoveryEscrow,
       recoverDataKey,
@@ -558,7 +562,106 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       record('the commitment is reproducible on this engine',
         commitToPublicKey(initiator.publicKey) === offered.commitment);
 
+      // ---- Gate 4 integration: the whole flow, driven ---------------------
+      //
+      // The block above proves the primitives run on Hermes. This proves the
+      // orchestration does: two lifecycles over two real Android Keystore
+      // entries, a relay between them, and the key moving from one to the other
+      // through the same code path the application uses.
+      //
+      // Still no PBKDF2. Neither `exportForPairing` nor `adoptPairedKey`
+      // touches the recovery escrow, and neither lifecycle is initialised — the
+      // trusted device's key is placed in custody directly, exactly as the
+      // block above does.
+      const trustedStorageKey = 'x1.selftest.pair.trusted';
+      const freshStorageKey = 'x1.selftest.pair.fresh';
+      const trustedCustody = createKeyCustody(storage, { storageKey: trustedStorageKey });
+      const freshCustody = createKeyCustody(storage, { storageKey: freshStorageKey });
+      await trustedCustody.clear();
+      await freshCustody.clear();
+      await trustedCustody.store(TEST_DEK);
+
+      const escrowStore = new InMemoryRecoveryEscrowStore();
+      const lifecycleFor = (custodyForDevice: ReturnType<typeof createKeyCustody>) =>
+        createDataKeyLifecycle({
+          custody: custodyForDevice,
+          escrowStore,
+          crypto,
+          context: { userId: PAIR_UID, appName: 'x1-selftest' },
+          randomBytes,
+        });
+
+      const pairClock = { value: Date.now() };
+      const relay = new InMemoryPairingRelay(() => pairClock.value);
+      const sessionFor = (
+        role: 'initiator' | 'responder',
+        custodyForDevice: ReturnType<typeof createKeyCustody>,
+      ) =>
+        createPairingSession({
+          role,
+          relay,
+          lifecycle: lifecycleFor(custodyForDevice),
+          cipher: pairingCipher,
+          randomBytes,
+          userId: PAIR_UID,
+          appName: 'x1-selftest',
+          now: () => pairClock.value,
+          agreement,
+        });
+
+      const settle = async () => {
+        for (let i = 0; i < 12; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      };
+
+      const trustedSide = sessionFor('initiator', trustedCustody);
+      const freshSide = sessionFor('responder', freshCustody);
+
+      await trustedSide.start();
+      await settle();
+      await freshSide.join(trustedSide.view().sessionId as string);
+      await settle();
+      record('the driver reaches the comparison step on both devices',
+        trustedSide.view().phase === 'compare-code' &&
+          freshSide.view().phase === 'compare-code',
+        `${trustedSide.view().phase}/${freshSide.view().phase}`);
+      record('both devices show the same code through the driver',
+        trustedSide.view().code !== null && trustedSide.view().code === freshSide.view().code,
+        String(trustedSide.view().code));
+
+      await freshSide.confirm();
+      await settle();
+      await trustedSide.confirm();
+      await settle();
+      await settle();
+
+      const adopted = await freshCustody.load();
+      record('the key reaches the second device through Gate 2 custody',
+        adopted !== null && adopted.length === 32 && adopted.every((b, i) => b === TEST_DEK[i]),
+        `${adopted === null ? 'null' : adopted.length} bytes`);
+      record('the trusted device still holds the same key',
+        (await trustedCustody.status()) === 'present');
+
+      // An expired pairing, which is the failure a person is most likely to
+      // hit. What must not happen is a replacement key appearing instead.
+      await freshCustody.clear();
+      const staleTrusted = sessionFor('initiator', trustedCustody);
+      const staleFresh = sessionFor('responder', freshCustody);
+      await staleTrusted.start();
+      await settle();
+      await staleFresh.join(staleTrusted.view().sessionId as string);
+      await settle();
+      pairClock.value += 10 * 60 * 1000;
+      await staleFresh.confirm();
+      await settle();
+      record('an expired pairing fails rather than completing',
+        staleFresh.view().phase === 'failed',
+        String(staleFresh.view().reason));
+      record('and mints no replacement key on the device that failed',
+        (await freshCustody.status()) === 'absent');
+
       // Leave nothing behind on the device.
+      await trustedCustody.clear();
+      await freshCustody.clear();
       await custody.clear();
     }
   } catch (error) {
