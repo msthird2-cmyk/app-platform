@@ -240,13 +240,23 @@ Never hard-code keys, log keys, place keys in URLs, or store them as plaintext i
 
 ## Encryption key architecture
 
-Approved design. **Not implemented** — there is no record encryption, no key
-management service, no recovery flow and no DEK persistence in this repository
-yet. It is recorded here so that when it is built it cannot drift, and so that
-no intermediate step ships a weaker version of it. The reasoning behind each
-rule is in `docs/ARCHITECTURE.md`.
+Approved design, now **partly implemented**. What exists today:
 
-Domain records will be encrypted on the device before they are persisted to
+| Piece | State |
+| --- | --- |
+| Portable crypto on Hermes (X-1) | implemented, verified on Android API 29 and 34 |
+| Secure key custody (Gate 2) | implemented — `keyCustody.ts`, protection tiers |
+| Recovery-code escrow (Gate 3) | implemented — `recoveryEscrow.ts` |
+| DEK lifecycle and persistence | implemented — `dataKeyLifecycle.ts`, `DataKeyGate` |
+| Record encryption (X-2) | implemented — `recordCrypto.ts`, `EncryptingRepository` |
+| Trusted-device pairing | **not implemented** |
+| Optional passphrase wrapper | **not implemented** |
+
+The reasoning behind each rule is in `docs/ARCHITECTURE.md`. The rules below
+still govern the two unimplemented paths, and continue to govern the five that
+exist — they are recorded so that no later step ships a weaker version of them.
+
+Domain records are encrypted on the device before they are persisted to
 Firestore. A randomly generated **Data Encryption Key (DEK)** encrypts them, and
 the DEK is never stored in plaintext in Firestore.
 
@@ -266,8 +276,10 @@ Every path wraps the *same* DEK. None of them is the DEK and none derives it:
 the DEK is random, never a deterministic function of anything the user types. A
 passphrase change rewrites one wrapped copy and re-encrypts no records.
 
-**Multi-device onboarding — trusted-device pairing.** The normal way a second
-device obtains the DEK: an already trusted, unlocked device approves it; both
+**Multi-device onboarding — trusted-device pairing.** Not yet implemented; until
+it is, a second device can only obtain the DEK through the recovery code, which
+this architecture designates as the exception rather than the normal path. The
+normal way a second device obtains the DEK: an already trusted, unlocked device approves it; both
 sides establish a shared transport key over ECDH; a human-visible verification
 code is shown on both devices and must match; the trusted device transfers the
 DEK wrapped under that transport key. The server relays public keys, pairing
@@ -277,7 +289,7 @@ verification banned above: the server holds no secret the client could read and
 the client writes no verdict. The NetWorth AI trusted-device ECDH pairing
 implementation is the reference design; do not invent a second mechanism.
 
-**Zero-trusted-device recovery.** A user who has lost every trusted device
+**Zero-trusted-device recovery.** Implemented (Gate 3). A user who has lost every trusted device
 recovers with their recovery code, which unwraps the DEK **locally**. It is a
 cryptographic key-escrow mechanism, not merely an authentication factor: the
 unwrap either succeeds or fails cryptographically, so nothing compares a secret,
@@ -286,7 +298,7 @@ client-side secret comparison. A server-side recovery-code *authentication*
 mechanism is a separate capability for when Blaze or other server infrastructure
 exists; it does not replace this one.
 
-**Optional encryption passphrase.** A user may additionally set a passphrase
+**Optional encryption passphrase.** Not yet implemented. A user may additionally set a passphrase
 that wraps the DEK, giving a second local recovery path. It is optional, not
 required for normal record access, and must never be used as the DEK itself.
 

@@ -41,6 +41,20 @@ export const SecurityErrorCode = {
   RECORD_NOT_ENCRYPTED: 'RECORD_NOT_ENCRYPTED',
   /** No data encryption key is available, so nothing can be read or written. */
   DATA_KEY_UNAVAILABLE: 'DATA_KEY_UNAVAILABLE',
+  /** An ephemeral key or a peer public key is not a valid P-256 point. */
+  PAIRING_KEY_INVALID: 'PAIRING_KEY_INVALID',
+  /** The session document is not one this system wrote. */
+  PAIRING_SESSION_INVALID: 'PAIRING_SESSION_INVALID',
+  /** The session is in a state this operation is not allowed from. */
+  PAIRING_STATE_INVALID: 'PAIRING_STATE_INVALID',
+  /** The session's window has closed. Never reopened, never extended. */
+  PAIRING_EXPIRED: 'PAIRING_EXPIRED',
+  /**
+   * The opened public key does not match the commitment published before the
+   * responder revealed its own. This is the man-in-the-middle detection that
+   * makes a six-digit code meaningful.
+   */
+  PAIRING_COMMITMENT_MISMATCH: 'PAIRING_COMMITMENT_MISMATCH',
   /**
    * The escrow document is not one this system wrote — wrong shape, wrong
    * field types, or a wrapped key of the wrong size once opened. Distinct from
