@@ -114,6 +114,14 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
     // Imported only now, so module evaluation itself happens with the globals
     // gone. A top-level read of one of them would throw here.
     const security = await import('@platform/security');
+    // Imported under the same conditions as the security package: with the
+    // browser globals gone, so a top-level read of one would throw here.
+    const {
+      EncryptingRepository,
+      InMemoryRepository,
+      isEncryptedRepository,
+      assertEncryptedRepository,
+    } = await import('@platform/data');
     const {
       PortableCryptoService,
       WebCryptoService,
@@ -658,6 +666,43 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
         String(staleFresh.view().reason));
       record('and mints no replacement key on the device that failed',
         (await freshCustody.status()) === 'absent');
+
+      // ---- Gate 5: the encryption boundary survives this toolchain --------
+      //
+      // The one genuinely engine-specific thing Gate 5 adds. The marker that
+      // separates the encrypting repository from the store beneath it is a
+      // computed symbol class field, which Babel transpiles on the way to
+      // Hermes bytecode. If it did not survive that, `assertEncryptedRepository`
+      // would throw on the device and every read and write in the application
+      // would fail closed — a total outage on real hardware that no host test
+      // would see, since Node runs the untranspiled class.
+      //
+      // Costs microseconds: one construction and one property read. No cipher
+      // operation, no key derivation.
+      const boundaryRepository = new EncryptingRepository({
+        inner: new InMemoryRepository(),
+        cipher: pairingCipher,
+        dataKey: async () => TEST_DEK,
+        userId: PAIR_UID,
+        appName: 'x1-selftest',
+      });
+      record('the encryption boundary marker survives Babel and Hermes',
+        isEncryptedRepository(boundaryRepository));
+      record('and the raw store still does not carry it',
+        !isEncryptedRepository(new InMemoryRepository()));
+
+      let rawRepositoryRefused = false;
+      try {
+        // Called through a plain function type: an assertion signature reached
+        // via a destructured binding needs an explicit annotation, and the
+        // narrowing is of no use here — only the throw is.
+        const refuseUnencrypting = assertEncryptedRepository as (value: unknown) => void;
+        refuseUnencrypting(new InMemoryRepository());
+      } catch {
+        rawRepositoryRefused = true;
+      }
+      record('a repository that does not encrypt is refused on this engine',
+        rawRepositoryRefused);
 
       // Leave nothing behind on the device.
       await trustedCustody.clear();

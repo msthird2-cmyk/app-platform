@@ -8,26 +8,52 @@ import {
   createPlatformSecureStorage,
   type SecureStorage,
 } from '@platform/security';
-import { InMemoryAuthService } from '@platform/auth';
-import { InMemoryAccountService } from '@platform/account';
-import { InMemoryBackupService } from '@platform/backup';
 import App from './App';
+import {
+  misconfigurationMessage,
+  selectBackend,
+  type BackendSelection,
+  type Environment,
+} from './src/config/backend';
+import {
+  createPreviewServices,
+  createProductionServices,
+  type NetWorthServices,
+} from './src/composition/services';
 
 /**
- * Preview entry point: every service is in-memory, so the app runs with no
- * backend. A production entry point constructs the Firebase implementations
- * from `@platform/firebase` and injects them exactly the same way.
+ * The entry point, and the only place that decides which backend this build
+ * talks to.
+ *
+ * Two failures are handled here and neither degrades into the other. Secure
+ * storage that cannot be built stops the app, because there is nowhere safe to
+ * put the data encryption key. Configuration that asks for Firebase and does
+ * not supply it also stops the app — it does **not** quietly start the
+ * in-memory composition, which would look like a working application while
+ * every record went into a process about to exit.
+ *
+ * `EXPO_PUBLIC_*` is read through `babel-preset-expo`, which inlines the
+ * literal at build time. Nothing here reads a secret and nothing is committed:
+ * an unconfigured checkout is a preview build, which is the safe default.
  */
-const authService = new InMemoryAuthService({
-  users: [{ email: 'you@example.com', password: 'correct1horse', displayName: 'You' }],
-  signedInAs: 'you@example.com',
-});
 
-const accountService = new InMemoryAccountService({
-  profile: { id: 'preview', email: 'you@example.com', displayName: 'You', createdAt: 0 },
-});
-
-const backupService = new InMemoryBackupService();
+/**
+ * Read as whole property accesses so the bundler can substitute each literal.
+ * `process.env` is not an object at runtime in a React Native bundle, so it
+ * cannot be enumerated — every variable has to be named.
+ */
+function readEnvironment(): Environment {
+  return {
+    EXPO_PUBLIC_NETWORTH_BACKEND: process.env.EXPO_PUBLIC_NETWORTH_BACKEND,
+    EXPO_PUBLIC_FIREBASE_API_KEY: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+    EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    EXPO_PUBLIC_FIREBASE_PROJECT_ID: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+    EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:
+      process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    EXPO_PUBLIC_FIREBASE_APP_ID: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  };
+}
 
 /**
  * Secure storage is chosen here, at the composition root, and injected — the
@@ -70,32 +96,67 @@ async function buildCustodyStorage(): Promise<Custody> {
   return { secureStorage, minimumProtection: 'os-keystore' };
 }
 
+function Unavailable({ message }: { message: string }) {
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', padding: 24 }}>
+      <Text>{message}</Text>
+    </View>
+  );
+}
+
 function Root() {
   const [custody, setCustody] = useState<Custody | null>(null);
+  const [services, setServices] = useState<NetWorthServices | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+
+    const selection: BackendSelection = selectBackend(readEnvironment());
+    if (selection.kind === 'misconfigured') {
+      // Fails closed. There is deliberately no `else` that reaches for the
+      // preview composition.
+      setFailure(misconfigurationMessage(selection));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    try {
+      setServices(
+        selection.kind === 'firebase'
+          ? createProductionServices(selection.firebase)
+          : createPreviewServices(),
+      );
+    } catch {
+      setFailure('This app could not connect to its backend, so it cannot start.');
+      return () => {
+        cancelled = true;
+      };
+    }
+
     buildCustodyStorage().then(
       (built) => !cancelled && setCustody(built),
       // Fails closed: no in-memory substitute, no plaintext fallback.
-      (error: unknown) => !cancelled && setFailure(String(error)),
+      () =>
+        !cancelled &&
+        setFailure('Secure storage is unavailable on this device, so the app cannot start.'),
     );
     return () => {
       cancelled = true;
     };
   }, []);
 
-  if (failure) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', padding: 24 }}>
-        <Text>Secure storage is unavailable on this device, so the app cannot start.</Text>
-      </View>
-    );
-  }
-  if (!custody) return <View style={{ flex: 1 }} />;
+  if (failure) return <Unavailable message={failure} />;
+  if (!custody || !services) return <View style={{ flex: 1 }} />;
 
-  return <App authService={authService} accountService={accountService} backupService={backupService} secureStorage={custody.secureStorage} minimumProtection={custody.minimumProtection} />;
+  return (
+    <App
+      services={services}
+      secureStorage={custody.secureStorage}
+      minimumProtection={custody.minimumProtection}
+    />
+  );
 }
 
 registerRootComponent(Root);

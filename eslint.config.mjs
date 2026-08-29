@@ -26,10 +26,40 @@ const DEPENDENCIES = {
 
 const ALL_PACKAGES = [...Object.keys(DEPENDENCIES), 'firebase'];
 
+/**
+ * The Firebase SDK. Anchored with a leading slash on purpose.
+ *
+ * `no-restricted-imports` matches a group with gitignore semantics, not
+ * minimatch, so an unanchored `firebase` matches any specifier whose last
+ * segment is `firebase` — including `@platform/firebase`, this repository's own
+ * service package. That made the rule mean more than its message says: a
+ * production entry point cannot exist without importing the wrapper, and the
+ * SDK ban is not the rule that governs it. Anchoring leaves the SDK ban exactly
+ * as strict and hands the wrapper to `PLATFORM_FIREBASE_PATTERN` below, which
+ * is where the composition-root exception in CLAUDE.md's dependency table is
+ * actually enforced.
+ */
 const FIREBASE_PATTERN = {
-  group: ['firebase', 'firebase/*', '@firebase/*'],
+  group: ['/firebase', '/firebase/*', '@firebase/*'],
   message:
     'Firebase may only be imported inside packages/firebase. Depend on a service interface instead.',
+};
+
+/**
+ * The service package, which is a different question from the SDK.
+ *
+ * Naming a backend is a composition-root decision. A screen, a domain module or
+ * a shared package that imports this has reached past the interfaces it is
+ * supposed to depend on — and in an application that is how a component ends up
+ * holding a repository that does not encrypt. Permitted only where the
+ * composition happens; `scripts/check-architecture.mjs` bans it again in
+ * screens, data and domain modules specifically.
+ */
+const PLATFORM_FIREBASE_PATTERN = {
+  group: ['@platform/firebase'],
+  message:
+    'Only an application composition root may name a backend. Screens and shared code '
+    + 'depend on service interfaces.',
 };
 
 const DEEP_IMPORT_PATTERN = {
@@ -114,6 +144,7 @@ export default tseslint.config(
       ],
       'no-restricted-imports': restrictedImports([
         FIREBASE_PATTERN,
+        PLATFORM_FIREBASE_PATTERN,
         DEEP_IMPORT_PATTERN,
         STYLING_PATTERN,
       ]),
@@ -129,8 +160,33 @@ export default tseslint.config(
     },
   },
   {
-    // Applications may import any shared package, but never each other.
+    // Applications may import any shared package, but never each other — and
+    // not the Firebase service package outside their composition root.
     files: ['apps/*/**/*'],
+    rules: {
+      'no-restricted-imports': restrictedImports([
+        FIREBASE_PATTERN,
+        PLATFORM_FIREBASE_PATTERN,
+        DEEP_IMPORT_PATTERN,
+        STYLING_PATTERN,
+      ]),
+    },
+  },
+  {
+    /**
+     * The composition root, and only it, may name a backend.
+     *
+     * These three paths are where an application decides what it talks to:
+     * the entry point, the service compositions and the configuration that
+     * chooses between them. Everything else in the application still cannot
+     * import the package at all, so a screen cannot acquire a repository that
+     * has not been through the encryption boundary.
+     */
+    files: [
+      'apps/*/index.tsx',
+      'apps/*/src/composition/**/*',
+      'apps/*/src/config/**/*',
+    ],
     rules: {
       'no-restricted-imports': restrictedImports([
         FIREBASE_PATTERN,

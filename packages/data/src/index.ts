@@ -1,6 +1,12 @@
 export { DataError, DataErrorCode } from './errors';
 export type { RecordMetadata, SyncableRecord, QueryOptions } from './types/record';
-export type { Repository } from './types/repository';
+export {
+  ENCRYPTION_BOUNDARY,
+  isEncryptedRepository,
+  assertEncryptedRepository,
+  type Repository,
+  type EncryptedRepository,
+} from './types/repository';
 export { InMemoryRepository } from './services/InMemoryRepository';
 export { resolveConflict, touch, type ConflictResolution } from './sync/conflict';
 export { planSync, runSync, type SyncPlan, type SyncResult } from './sync/syncEngine';

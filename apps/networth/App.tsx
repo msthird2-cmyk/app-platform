@@ -1,28 +1,33 @@
 import { AppCore, PairNewDeviceButton } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
-import { InMemoryRepository } from '@platform/data';
 import { getRandomBytes } from 'expo-crypto';
 import {
   createCryptoService,
   createDataKeyLifecycle,
   createKeyCustody,
   createRecordCipher,
-  InMemoryRecoveryEscrowStore,
 } from '@platform/security';
-import type { PairingRelay, RecoveryEscrowStore, SecureStorage } from '@platform/security';
-import type { AuthService } from '@platform/auth';
-import type { AccountService } from '@platform/account';
-import type { BackupService } from '@platform/backup';
-import { DashboardScreen } from './src/screens/DashboardScreen';
+import type { SecureStorage } from '@platform/security';
+import { NetWorthScreen } from './src/screens/NetWorthScreen';
 import { messageForCode } from './src/messages';
+import { COLLECTIONS } from './src/collections';
+import type { NetWorthServices } from './src/composition/services';
 import { DEMO_ASSETS, DEMO_LIABILITIES, DEMO_PREVIOUS_NET_WORTH } from './src/demo';
 
 export const APP_NAME = 'Net Worth';
 
-export const COLLECTIONS = ['assets', 'liabilities', 'snapshots'] as const;
+export { COLLECTIONS };
 
 export interface NetWorthAppProps {
-  authService: AuthService;
+  /**
+   * Every backend-dependent service, chosen by the entry point.
+   *
+   * One object rather than six props: the six must come from the same
+   * composition, and passing them separately is what would let a build end up
+   * with Firebase records and an in-memory escrow — a user whose data is on the
+   * server and whose recovery path evaporates when the process exits.
+   */
+  services: NetWorthServices;
   secureStorage: SecureStorage;
   /**
    * The tier this application will accept for key custody. Decided by the
@@ -30,30 +35,20 @@ export interface NetWorthAppProps {
    * whatever turned up — inferring it would accept a downgrade silently.
    */
   minimumProtection?: 'os-keystore' | 'browser-nonextractable';
-  /** Firestore in production; in-memory here, so a preview is self-contained. */
-  escrowStore?: RecoveryEscrowStore;
-  /**
-   * The trusted-device pairing transport. Firestore in production; absent in
-   * this preview, and pairing is then not offered anywhere — a second device
-   * would use the recovery code instead.
-   */
-  pairingRelay?: PairingRelay;
-  accountService: AccountService;
-  backupService: BackupService;
 }
 
 /**
- * Composition root for Net Worth. Concrete services are injected here — the
- * production entry point passes the Firebase implementations.
+ * Composition root for Net Worth.
+ *
+ * The cryptography is identical in both backends and is built here: the same
+ * record cipher, the same custody, the same lifecycle. Only what sits *below*
+ * the encryption boundary differs, which is the property that makes a preview
+ * build meaningful evidence about the production one.
  */
 export default function App({
-  authService,
-  accountService,
-  backupService,
+  services,
   secureStorage,
   minimumProtection = 'os-keystore',
-  escrowStore = new InMemoryRecoveryEscrowStore(),
-  pairingRelay,
 }: NetWorthAppProps) {
   const cryptoService = createCryptoService({ randomBytes: getRandomBytes });
   // AES-256-GCM directly under the data encryption key. No KDF: the key is
@@ -69,7 +64,7 @@ export default function App({
   const dataKeyLifecycleFor = (userId: string) =>
     createDataKeyLifecycle({
       custody: createKeyCustody(secureStorage, { minimumProtection }),
-      escrowStore,
+      escrowStore: services.escrowStore,
       crypto: cryptoService,
       context: { userId, appName: APP_NAME },
       randomBytes: getRandomBytes,
@@ -79,14 +74,14 @@ export default function App({
     <AppCore
       appName={APP_NAME}
       collections={COLLECTIONS}
-      authService={authService}
-      accountService={accountService}
-      backupService={backupService}
-      repository={new InMemoryRepository()}
+      authService={services.authService}
+      accountService={services.accountService}
+      backupService={services.backupService}
+      repository={services.repository}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}
       recordCipher={recordCipher}
-      pairingRelay={pairingRelay}
+      pairingRelay={services.pairingRelay}
       randomBytes={getRandomBytes}
       secureStorage={secureStorage}
       signedOut={
@@ -101,11 +96,17 @@ export default function App({
         {/* Renders nothing unless a pairing relay was injected. The trusted
             device is the one that can give a copy of the key to another. */}
         <PairNewDeviceButton />
-        <DashboardScreen
-          assets={DEMO_ASSETS}
-          liabilities={DEMO_LIABILITIES}
-          previousNetWorth={DEMO_PREVIOUS_NET_WORTH}
-          onAddAsset={() => undefined}
+        <NetWorthScreen
+          // Production starts empty; a preview seeds the sample portfolio
+          // through the same encrypted write path so it is not a special case.
+          seed={
+            services.backend === 'preview'
+              ? { assets: DEMO_ASSETS, liabilities: DEMO_LIABILITIES }
+              : undefined
+          }
+          previousNetWorth={
+            services.backend === 'preview' ? DEMO_PREVIOUS_NET_WORTH : null
+          }
         />
       </>
     </AppCore>

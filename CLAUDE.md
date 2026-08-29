@@ -82,9 +82,24 @@ docs/ARCHITECTURE.md
 | `backup` | `ui`, `theme`, `utils`, `data`, `security` |
 | `firebase` | interfaces/types only from shared packages |
 | `core` | any shared package |
-| `apps/*` | any shared package |
+| `apps/*` | any shared package — but see the note below on `@platform/firebase` |
 
 Nothing in `packages/` imports from `apps/`. `packages/firebase` never imports a component or hook. `core` composes services but contains no app-specific business rules.
+
+**`@platform/firebase` is the one exception to "any shared package".** Naming a
+backend is a composition-root decision, so an application may import it only
+from its entry point, `src/composition/**` or `src/config/**`. A screen, a data
+module or a shared package that imports it has reached past the interfaces it is
+meant to depend on, and in an application that is how a component ends up
+holding a repository that does not encrypt. Enforced in `eslint.config.mjs`, and
+again for screens, data and domain modules in `scripts/check-architecture.mjs`.
+
+Note that rule 2 above bans the Firebase **SDK** — `firebase/*` and
+`@firebase/*` — which is a different question from this package.
+`no-restricted-imports` matches its groups with gitignore semantics rather than
+minimatch, so an unanchored `firebase` pattern silently matches
+`@platform/firebase` too; the SDK patterns are anchored (`/firebase`) to keep
+the two rules distinct.
 
 ## Reusable component architecture
 
@@ -251,7 +266,8 @@ Approved design, now **partly implemented**. What exists today:
 | Record encryption (X-2) | implemented — `recordCrypto.ts`, `EncryptingRepository` |
 | Trusted-device pairing — protocol and relay (Gate 4) | implemented — `pairing.ts`, `KeyAgreement.ts`, `verificationCode.ts`, `FirebasePairingRelay` |
 | Trusted-device pairing — application integration | implemented — `pairingSession.ts`, `PairingFlow`, `DataKeyGate`; **offered only where a relay is injected** |
-| Production Firebase application wiring | **not done** — `createFirebaseBackend` exists; no application entry point calls it |
+| Production Firebase application wiring | **Net Worth only** — selected by `EXPO_PUBLIC_NETWORTH_BACKEND`; Investment and Expense remain in-memory |
+| Encryption boundary enforced structurally | implemented — `EncryptedRepository`, `useRepository()`, `backupFlow`, four architecture guards |
 | Optional passphrase wrapper | **not implemented** |
 
 The reasoning behind each rule is in `docs/ARCHITECTURE.md`. The rules below
@@ -303,11 +319,55 @@ on that path reaches a key generator, first-time setup or the recovery path.
 **Where pairing is offered.** `AppCore` takes an optional `pairingRelay`. With
 one, `DataKeyGate` offers "Use another signed-in device" beside the recovery
 code and `PairNewDeviceButton` renders on the trusted-device path; without one,
-pairing is offered nowhere and a second device uses the recovery code. The three
-preview entry points inject no relay, so **no shipped application performs live
-Firestore pairing today** — `createFirebaseBackend` in `packages/firebase`
-constructs the relay along with the other Firebase services, and switching an
-application onto it is a separate, application-level change.
+pairing is offered nowhere and a second device uses the recovery code. Net Worth
+supplies the Firebase relay when it is configured for Firebase, so pairing is
+available in that build and in no other; the preview compositions inject no
+relay.
+
+## Production wiring
+
+**Net Worth is the production composition root.** `apps/networth/index.tsx`
+chooses a backend and nothing else does:
+
+- `EXPO_PUBLIC_NETWORTH_BACKEND=firebase` plus the six
+  `EXPO_PUBLIC_FIREBASE_*` values → the Firebase services from
+  `createFirebaseBackend`.
+- unset, or `preview` → the in-memory services.
+- anything else, or Firebase with a value missing → **a misconfiguration
+  screen**. It does not fall back to in-memory. A build that appears to work
+  while every record goes into a process about to exit is the same class of
+  failure as a plaintext fallback.
+
+Configuration comes from `EXPO_PUBLIC_*`, inlined by `babel-preset-expo` at
+build time. Nothing is hard-coded and nothing is committed: an unconfigured
+checkout is a preview build. Investment and Expense are deliberately still
+in-memory; converting them is the same shape of change and is not done.
+
+**No live Firebase round trip has been observed.** No project configuration
+exists in this repository or in CI, so what is established is that the
+production composition is constructed and that every layer above it — the
+encryption boundary, the record envelope, the key lifecycle — is exercised
+against a store standing exactly where `FirebaseRepository` stands. Reading and
+writing a real Firestore document, and the `email_verified` requirement the
+record rules impose on every create and update, remain unverified until someone
+supplies a project. Do not describe Net Worth as proven against Firebase on the
+strength of the tests alone.
+
+**App Check is disabled for this build, with a stated reason.**
+`createFirebaseApp` requires the decision either way, so it is recorded rather
+than omitted: on React Native, attestation comes from the native Firebase SDK,
+and the web SDK's reCAPTCHA providers do not apply. Wiring the native side is
+separate work and is not implemented.
+
+**The encryption boundary is structural, not conventional.** `Repository` cannot
+say when payloads were sealed, so `EncryptedRepository` — carried only by
+`EncryptingRepository` — can. `useRepository()` returns that type and throws
+`REPOSITORY_NOT_ENCRYPTING` otherwise, `AppCore` requires `recordCipher` and
+`dataKeyLifecycleFor` together so there is no branch that renders an application
+over the raw repository, and `runBackup`/`runRestore` require the boundary in
+their signatures and assert it again at runtime. `scripts/check-architecture.mjs`
+fails the build if any of those is undone, or if a screen imports
+`@platform/firebase` or constructs a repository of its own.
 
 **Zero-trusted-device recovery.** Implemented (Gate 3). A user who has lost every trusted device
 recovers with their recovery code, which unwraps the DEK **locally**. It is a

@@ -1,10 +1,11 @@
 import { createId, createLogger } from '@platform/utils';
 import {
+  assertEncryptedRepository,
   buildExportBundle,
   decryptExportBundle,
   encryptExportBundle,
+  type EncryptedRepository,
   type ExportBundle,
-  type Repository,
   type SyncableRecord,
 } from '@platform/data';
 import { assertStrongPassphrase, type CryptoService } from '@platform/security';
@@ -23,12 +24,31 @@ export interface RunBackupOptions {
   onProgress?: (progress: BackupProgress) => void;
 }
 
+/**
+ * Both directions of this flow require the repository *above* the encryption
+ * boundary, and for opposite reasons.
+ *
+ * Backup reads. Given the raw repository it would read stored documents rather
+ * than domain objects — envelopes, not records — and produce an export that
+ * decrypts to ciphertext nobody can open without a data encryption key the
+ * bundle does not contain. A backup that silently cannot be restored is worse
+ * than a failed one.
+ *
+ * Restore writes, and that is the dangerous half: `repository.put` on a raw
+ * repository sends plaintext domain fields straight at Firestore. The Security
+ * Rules reject a document with no envelope, so it fails closed — but the
+ * architecture must not depend on the server for that, which is why the type
+ * says `EncryptedRepository` and the first statement checks it anyway.
+ */
 export async function runBackup(
-  repository: Repository,
+  repository: EncryptedRepository,
   crypto: CryptoService,
   backups: BackupService,
   options: RunBackupOptions,
 ): Promise<BackupSummary> {
+  // Before the passphrase check and before any read: a cast or a JavaScript
+  // caller gets past the type, and this is the moment that would matter.
+  assertEncryptedRepository(repository);
   const { onProgress } = options;
   if (options.passphrase.length === 0) throw new BackupError(BackupErrorCode.PASSPHRASE_REQUIRED);
   // A weak passphrase defeats every other control on this path, so it is
@@ -87,11 +107,12 @@ export interface RunRestoreOptions {
 }
 
 export async function runRestore(
-  repository: Repository,
+  repository: EncryptedRepository,
   crypto: CryptoService,
   backups: BackupService,
   options: RunRestoreOptions,
 ): Promise<{ restored: number; bundle: ExportBundle }> {
+  assertEncryptedRepository(repository);
   if (!options.confirmed) throw new BackupError(BackupErrorCode.RESTORE_CONFIRMATION_REQUIRED);
   if (options.passphrase.length === 0) throw new BackupError(BackupErrorCode.PASSPHRASE_REQUIRED);
 

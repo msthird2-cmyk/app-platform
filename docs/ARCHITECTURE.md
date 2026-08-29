@@ -148,6 +148,14 @@ Enable Firebase App Check where supported. For native builds use an appropriate 
 
 App Check is not authorization and is never the only control. Rules must remain secure if App Check is bypassed.
 
+**Current state: no build enables it.** Net Worth, the one application wired to
+Firebase, passes the documented `provider: 'disabled'` opt-out with a written
+reason rather than omitting the decision. On React Native attestation comes from
+the native Firebase SDK, and the web SDK's reCAPTCHA providers do not apply, so
+satisfying the rule above is native work that has not been done. It is a gap
+against this section, recorded as one — and it costs no authorization, because
+the paragraph above already requires the Rules to hold without it.
+
 ## Authentication
 
 Use Firebase Authentication for identity. Required flows include signup, login, logout, password reset, email verification and recent reauthentication for destructive/sensitive actions.
@@ -272,11 +280,41 @@ architecture check fails on a key generator anywhere on the pairing path.
 **Where it is available.** Pairing needs a relay, and a relay needs Firestore.
 `AppCore` takes one optionally; without it the flow is not offered anywhere,
 because a button that starts something the application cannot finish is worse
-than no button. `createFirebaseBackend` builds the relay together with the other
-Firebase services, so a production entry point is a few lines — but no
-application entry point calls it today, and each still injects the in-memory
-services. Live Firestore pairing is therefore implemented and unwired, and that
-distinction is stated here rather than glossed.
+than no button. Net Worth now supplies the Firebase relay whenever it is
+configured for Firebase, so pairing is reachable in that build and in no other.
+
+**Why the encryption boundary had to become a type.** Wiring one application to
+Firebase turned two latent hazards into live ones. `Repository` is an interface,
+and an interface cannot express *when* payloads were sealed — `FirebaseRepository`
+and `EncryptingRepository` satisfy it identically. So a composition root could
+hand `AppCore` a repository and omit the cipher, and every domain write went to
+persistence in the clear; and `runRestore`, which calls `repository.put` with
+records out of a decrypted bundle, would do the same if given the store beneath
+the boundary. The Security Rules refuse a document with no envelope, so both fail
+closed — but an architecture whose only defence is the server noticing is one
+mistake away from not having that defence either, on the day someone points it
+at a backend whose rules are laxer.
+
+The fix is to make the boundary a fact the compiler can check. Only
+`EncryptingRepository` carries the marker; `EncryptedRepository` is what code
+handling domain objects asks for; `useRepository()` returns it or throws; and
+`AppCore` no longer has a branch that renders an application without it. Each has
+a runtime assertion behind the type, because a cast, an `any` at a module edge or
+a JavaScript caller all get past a type and none of them gets past a throw.
+
+**What production wiring deliberately does not do.** It does not fall back. A
+build configured for Firebase that cannot construct it renders a
+misconfiguration rather than quietly starting the in-memory composition — the
+same reasoning as the plaintext fallback this architecture forbids: an
+application that looks like it is working while the data is not where the user
+thinks it is, is worse than one that stops.
+
+It also has not been observed. No project configuration exists in this
+repository or in CI, so what the tests establish is that the production
+composition constructs and that every layer above it runs against a store
+standing exactly where `FirebaseRepository` stands. The network path, the
+Security Rules and the `email_verified` requirement they impose on every record
+write are exercised for the first time by whoever supplies a project.
 
 Recovery is the exception rather than the default because it is the weakest link
 — a single secret that reconstructs everything. Making it routine would mean

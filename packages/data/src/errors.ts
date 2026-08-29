@@ -14,6 +14,12 @@ export const DataErrorCode = {
   IMPORT_INVALID: 'IMPORT_INVALID',
   IMPORT_VERSION_UNSUPPORTED: 'IMPORT_VERSION_UNSUPPORTED',
   EXPORT_FAILED: 'EXPORT_FAILED',
+  /**
+   * A repository that does not seal payloads was handed to code that requires
+   * one that does. Never downgraded to a warning: the alternative to failing
+   * here is writing a user's records in the clear.
+   */
+  REPOSITORY_NOT_ENCRYPTING: 'REPOSITORY_NOT_ENCRYPTING',
 } as const;
 
 export type DataErrorCode = (typeof DataErrorCode)[keyof typeof DataErrorCode];

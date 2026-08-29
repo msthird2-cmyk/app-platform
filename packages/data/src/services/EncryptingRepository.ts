@@ -7,7 +7,7 @@ import {
   type RecordCipher,
   type RecordEnvelope,
 } from '@platform/security';
-import type { Repository } from '../types/repository';
+import { ENCRYPTION_BOUNDARY, type EncryptedRepository, type Repository } from '../types/repository';
 import type { QueryOptions, SyncableRecord } from '../types/record';
 
 /**
@@ -79,8 +79,17 @@ function splitMetadata(record: SyncableRecord): {
 }
 
 export class EncryptingRepository<T extends object = Record<string, unknown>>
-  implements Repository<T>
+  implements EncryptedRepository<T>
 {
+  /**
+   * The marker that distinguishes this from the repository it wraps.
+   *
+   * Declared on the class rather than attached afterwards, so there is no
+   * moment at which an instance exists without it and no way to forge one
+   * except by writing the symbol deliberately.
+   */
+  readonly [ENCRYPTION_BOUNDARY] = true as const;
+
   constructor(private readonly options: EncryptingRepositoryOptions) {}
 
   private async key(): Promise<Uint8Array> {
