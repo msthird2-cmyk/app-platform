@@ -47,13 +47,26 @@ with none of these set is a preview build.
 
 ## What has and has not been verified
 
-The production composition is constructed and every layer above it is tested:
-the encryption boundary, the record envelope, the key lifecycle and the pairing
-relay all run against a store standing exactly where `FirebaseRepository`
-stands. **No live Firestore round trip has been performed**, because no project
-configuration exists in this repository or in CI. The first run against a real
-project is the first time the network path, the Security Rules and the
-`email_verified` requirement are exercised together.
+**A live Firestore round trip has been performed.** `tests/firebase.integration.test.ts`
+runs this application's own production composition against a real Firebase
+project: sign-in with a verified address, a record written through
+`useRepository()`'s repository and read back, the stored document inspected over
+REST and confirmed to hold ciphertext and no name, category or amount, an update,
+a tombstone, the recovery escrow saved and reopened, and the full two-device
+pairing exchange over the real relay.
+
+Run it by setting the six `EXPO_PUBLIC_FIREBASE_*` values plus
+`NETWORTH_TEST_EMAIL` and `NETWORTH_TEST_PASSWORD`; with any of them missing the
+suite skips and the rest of the tests run normally. Point it only at a
+disposable project — it writes and deletes documents under the signed-in user.
+The account needs a verified address, because the rules require one on every
+record write and nothing here can grant it.
+
+Two gaps remain. The Cloud Storage backup path has not been exercised against a
+real bucket. And key custody cannot be exercised off-device at all: the
+architecture refuses a `memory` protection tier, so the data key in that suite
+is held by the harness rather than a keystore, and custody itself is proven on
+Android API 29 and 34 by the Hermes self-test.
 
 ## What a production build does and does not have
 
