@@ -12,16 +12,44 @@ import { WebCryptoService } from '@platform/security';
 const crypto = new WebCryptoService(100_000);
 const CONTEXT = { userId: 'user-1', appName: 'Net Worth' };
 
+/**
+ * Every value here contains a hyphen, deliberately.
+ *
+ * The leak assertion below is a substring search against a document that is
+ * mostly fresh random base64, and base64's alphabet is `A-Za-z0-9+/=`. A needle
+ * containing a hyphen therefore cannot appear in it by chance — not merely
+ * unlikely, impossible. The id used to be `a1`, and two characters drawn from
+ * the base64 alphabet turn up in ~230 characters of ciphertext about 6% of the
+ * time, so the test failed roughly one run in sixteen for no reason at all.
+ * Keep the hyphens.
+ */
 const bundle = buildExportBundle(
   'Net Worth',
-  { assets: [{ id: 'a1', updatedAt: 1, revision: 1, deletedAt: null }] },
+  {
+    assets: [
+      {
+        id: 'asset-one',
+        name: 'Savings-Account',
+        amount: 1234.56,
+        updatedAt: 1,
+        revision: 1,
+        deletedAt: null,
+      },
+    ],
+  },
   1_700_000_000_000,
 );
 
 describe('export bundles', () => {
   it('encrypts the whole bundle, leaving no plaintext record', async () => {
     const encrypted = await encryptExportBundle(bundle, 'passphrase', crypto, CONTEXT);
-    expect(JSON.stringify(encrypted)).not.toContain('a1');
+    const serialised = JSON.stringify(encrypted);
+
+    // The id and every domain value, not just the id: the claim is that no
+    // plaintext record survives, and one token was never enough to show it.
+    for (const secret of ['asset-one', 'Savings-Account', '1234.56']) {
+      expect(serialised, secret).not.toContain(secret);
+    }
     expect(encrypted.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
   });
 
