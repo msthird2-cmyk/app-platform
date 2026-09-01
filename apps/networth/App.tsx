@@ -1,4 +1,9 @@
-import { AppCore, BackupControls, PairNewDeviceButton } from '@platform/core';
+import {
+  AppCore,
+  BackupControls,
+  PairNewDeviceButton,
+  PassphraseControls,
+} from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { getRandomBytes } from 'expo-crypto';
 import {
@@ -110,6 +115,9 @@ export default function App({
         />
         {/* Renders nothing unless a backup transport was injected. */}
         <BackupControls collections={COLLECTIONS} messageForCode={messageForCode} />
+        {/* The passphrase in front of this device's key. Renders nothing
+            outside the gate, where there is no key to protect. */}
+        <PassphraseControls messageForCode={messageForCode} />
       </>
     </AppCore>
   );

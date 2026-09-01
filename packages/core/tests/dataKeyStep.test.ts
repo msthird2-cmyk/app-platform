@@ -35,7 +35,7 @@ describe('dataKeyStep', () => {
     // navigating away from it before the user has written it down would lose
     // their recovery path.
     const states: Array<DataKeyState | null> = [
-      null, 'ready', 'needs-setup', 'needs-recovery', 'unusable',
+      null, 'ready', 'needs-setup', 'needs-recovery', 'locked', 'unusable',
     ];
     for (const state of states) {
       expect(dataKeyStep(state, 'K7QM-2XPD-9RTF'), String(state)).toBe('show-code');
@@ -43,7 +43,7 @@ describe('dataKeyStep', () => {
   });
 
   it('never routes any state to setup except needs-setup', () => {
-    const states: Array<DataKeyState> = ['ready', 'needs-recovery', 'unusable'];
+    const states: Array<DataKeyState> = ['ready', 'needs-recovery', 'locked', 'unusable'];
     for (const state of states) {
       expect(dataKeyStep(state, null), state).not.toBe('setup');
     }
@@ -83,5 +83,37 @@ describe('dataKeyStep — trusted-device pairing', () => {
 
   it('does not interrupt a ready application', () => {
     expect(dataKeyStep('ready', null, true)).toBe('ready');
+  });
+});
+
+
+/**
+ * A locked key is on the device and shut. The two states it must never be
+ * confused with are the two that cost something: `needs-setup` writes a new key
+ * over it, and `needs-recovery` spends the one-copy recovery code on a lock the
+ * passphrase opens.
+ */
+describe('dataKeyStep — a passphrase-protected key', () => {
+  it('asks for the passphrase', () => {
+    expect(dataKeyStep('locked', null)).toBe('unlock');
+  });
+
+  it('never offers setup or recovery for it', () => {
+    const step = dataKeyStep('locked', null);
+    expect(step).not.toBe('setup');
+    expect(step).not.toBe('recover');
+  });
+
+  it('does not let the pairing request divert it', () => {
+    // Pairing is the alternative to typing a recovery code on a device that
+    // has no key. This device has one; adopting another would replace it and
+    // drop the protection with it.
+    expect(dataKeyStep('locked', null, true)).toBe('unlock');
+  });
+
+  it('renders the application once the passphrase has opened it', () => {
+    // The lifecycle reports `ready` after an unlock, identically to an
+    // unprotected device — downstream of the gate they are the same thing.
+    expect(dataKeyStep('ready', null)).toBe('ready');
   });
 });

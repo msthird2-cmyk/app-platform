@@ -3,6 +3,7 @@ import { AppText, Button, Loading, Screen, TextField } from '@platform/ui';
 import type { DataKeyLifecycle, DataKeyState, PairingRole, PairingSession } from '@platform/security';
 import { dataKeyStep } from './dataKeyStep';
 import { PairDeviceProvider } from './PairDeviceContext';
+import { PassphraseProvider } from './PassphraseContext';
 import { PairingFlow } from './PairingFlow';
 
 /**
@@ -49,6 +50,11 @@ export interface DataKeyGateLabels {
   recoverAction: string;
   recoverPlaceholder: string;
   recoverFailed: string;
+  unlockTitle: string;
+  unlockBody: string;
+  unlockAction: string;
+  unlockPlaceholder: string;
+  unlockFailed: string;
   unusableTitle: string;
   unusableBody: string;
   pairInsteadAction: string;
@@ -75,6 +81,14 @@ const DEFAULT_LABELS: DataKeyGateLabels = {
   recoverAction: 'Recover',
   recoverPlaceholder: 'XXXX-XXXX-XXXX',
   recoverFailed: 'That code did not open your key. Check it and try again.',
+  unlockTitle: 'Enter your passphrase',
+  unlockBody:
+    'Your key is on this device and protected by a passphrase. It is needed once '
+    + 'each time the app starts. If you have forgotten it, your recovery code still '
+    + 'works on a fresh install.',
+  unlockAction: 'Unlock',
+  unlockPlaceholder: 'Passphrase',
+  unlockFailed: 'That passphrase did not open your key. Check it and try again.',
   unusableTitle: 'Your encryption key cannot be read',
   unusableBody:
     'A key is stored on this device but cannot be opened — this usually follows '
@@ -92,6 +106,7 @@ export function DataKeyGate({
 }: DataKeyGateProps) {
   const text = { ...DEFAULT_LABELS, ...labels };
   const [state, setState] = useState<DataKeyState | null>(null);
+  const [protectedKey, setProtectedKey] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [entered, setEntered] = useState('');
   const [busy, setBusy] = useState(false);
@@ -100,6 +115,7 @@ export function DataKeyGate({
 
   const refresh = useCallback(async () => {
     setState(await lifecycle.status());
+    setProtectedKey(await lifecycle.isProtected());
   }, [lifecycle]);
 
   useEffect(() => {
@@ -137,6 +153,24 @@ export function DataKeyGate({
     } catch {
       // Deliberately one message for every failure. A wrong code and a
       // tampered escrow are indistinguishable here, and neither produced a key.
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [lifecycle, entered, refresh]);
+
+  const runUnlock = useCallback(async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      await lifecycle.unlock(entered);
+      // Cleared immediately. The passphrase is not kept in component state a
+      // moment longer than the attempt that used it.
+      setEntered('');
+      await refresh();
+    } catch {
+      // One message for every failure, as with recovery: a wrong passphrase and
+      // a tampered wrapper are indistinguishable, and neither produced a key.
       setFailed(true);
     } finally {
       setBusy(false);
@@ -216,6 +250,27 @@ export function DataKeyGate({
     );
   }
 
+  if (step === 'unlock') {
+    return (
+      <Screen>
+        <AppText variant="title">{text.unlockTitle}</AppText>
+        <AppText>{text.unlockBody}</AppText>
+        <TextField
+          label={text.unlockTitle}
+          value={entered}
+          onChangeText={setEntered}
+          placeholder={text.unlockPlaceholder}
+          secureTextEntry
+        />
+        {failed ? <AppText tone="down">{text.unlockFailed}</AppText> : null}
+        <Button label={text.unlockAction} onPress={() => void runUnlock()} disabled={busy} />
+        {/* No recovery button here, deliberately. The key is on this device;
+            spending the one-copy recovery code to get past a passphrase the
+            user may simply be mistyping would be a bad trade to offer. */}
+      </Screen>
+    );
+  }
+
   if (step === 'pair' && pairingSession) {
     return (
       <PairingFlow session={pairingSession} onComplete={endPairing} onCancel={endPairing} />
@@ -247,7 +302,23 @@ export function DataKeyGate({
         begin: () => setPairingRole('initiator'),
       }}
     >
-      {children}
+      <PassphraseProvider
+        value={{
+          protected: protectedKey,
+          // `refresh` after each, so the gate's own state follows the change
+          // rather than drifting from what is actually stored.
+          protect: async (passphrase) => {
+            await lifecycle.protect(passphrase);
+            await refresh();
+          },
+          change: async (currentPassphrase, nextPassphrase) => {
+            await lifecycle.changePassphrase(currentPassphrase, nextPassphrase);
+            await refresh();
+          },
+        }}
+      >
+        {children}
+      </PassphraseProvider>
     </PairDeviceProvider>
   );
 }

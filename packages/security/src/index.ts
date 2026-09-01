@@ -82,6 +82,15 @@ export {
   fromRecoveryEscrowDocument,
 } from './recoveryEscrow';
 export {
+  DATA_KEY_WRAPPER_PURPOSE,
+  DATA_KEY_WRAPPER_VERSION,
+  assertWrappedDataKey,
+  wrapDataKey,
+  unwrapDataKey,
+  changeDataKeyPassphrase,
+  type WrappedDataKey,
+} from './dataKeyWrapper';
+export {
   type RecoveryEscrowStore,
   type DataKeyState,
   type DataKeyLifecycle,

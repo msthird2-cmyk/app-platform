@@ -78,6 +78,13 @@ Android API 29 and 34 by the Hermes self-test.
 - **Backup** is an encrypted file you export and keep. Nothing is uploaded, no
   copy is retained here, and no one — including whoever runs this — can open it
   or reset its passphrase. Save it somewhere you control, or you do not have one.
+- **A passphrase on this device's key** is offered and off by default. It wraps
+  the data key in the keystore, so the keystore alone stops being enough to read
+  your records: a device found at rest needs the passphrase too, asked for once
+  each cold start. It is never sent anywhere, and there is nothing that can
+  reset it. Forgetting it costs this device and not your data — your recovery
+  code still works on a fresh install. It does not protect a device somebody
+  takes while the app is open and unlocked.
 - **Pairing** is available, because a Firebase build supplies the relay.
 - **App Check is disabled**, with a stated reason: on React Native attestation
   comes from the native Firebase SDK, and the web SDK's reCAPTCHA providers do

@@ -204,6 +204,119 @@ describe('unreadable is never absent', () => {
   });
 });
 
+/**
+ * Custody's half of the passphrase work.
+ *
+ * `dataKeyProtection.test.ts` exercises the lifecycle, which short-circuits on
+ * `status()` and never reaches `load()` for a protected key. These cases go at
+ * custody directly, so the guarantee holds for any future caller that does not
+ * check the status first — which is exactly the caller that would get hurt.
+ */
+describe('a protected key is present and shut', () => {
+  /** A v2 envelope. Custody never opens one, so the contents are irrelevant. */
+  const WRAPPED = JSON.stringify({
+    v: 2,
+    w: { version: 1, wrappedKey: { version: 1, algorithm: 'AES-GCM', iterations: 210_000 } },
+  });
+
+  it('reports protected — never absent, and never present', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    storage.entries.set(STORAGE_KEY, WRAPPED);
+
+    const status = await custody.status();
+    expect(status).toBe('protected');
+    // Both of the wrong answers, named. `absent` is the state in which a
+    // caller creates a key; `present` is the state in which it expects
+    // `load()` to hand one over.
+    expect(status).not.toBe('absent');
+    expect(status).not.toBe('present');
+  });
+
+  it('throws rather than returning null from load()', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    storage.entries.set(STORAGE_KEY, WRAPPED);
+
+    // `null` is the contract's word for "there is no key". Returning it here
+    // would tell first-time setup to run, and setup writes a new key over this
+    // one — orphaning every record encrypted under the original.
+    await expect(custody.load()).rejects.toMatchObject({
+      code: SecurityErrorCode.DATA_KEY_LOCKED,
+    });
+  });
+
+  it('hands back the wrapper for opening, and nothing else does', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    storage.entries.set(STORAGE_KEY, WRAPPED);
+
+    expect(await custody.loadWrapped()).toEqual(JSON.parse(WRAPPED).w);
+  });
+
+  it('reports no wrapper for an unprotected or empty device', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+
+    expect(await custody.loadWrapped()).toBeNull();
+    await custody.store(TEST_DEK);
+    // `null`, not the key: a caller asking for a wrapper must not be handed
+    // the plaintext key because there happens to be one.
+    expect(await custody.loadWrapped()).toBeNull();
+  });
+
+  it('storing a wrapper replaces the plain key in the same slot', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    await custody.store(TEST_DEK);
+
+    await custody.storeWrapped(JSON.parse(WRAPPED).w);
+
+    expect([...storage.entries.keys()]).toEqual([STORAGE_KEY]);
+    expect(await custody.status()).toBe('protected');
+    // And the plaintext key is gone from storage, not merely shadowed.
+    expect(storage.entries.get(STORAGE_KEY)).not.toContain(toBase64(TEST_DEK));
+  });
+
+  it('storing a plain key over a wrapper unprotects it, which recovery relies on', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    storage.entries.set(STORAGE_KEY, WRAPPED);
+
+    // Deliberate. Recovery and pairing both call `store`, both are moments at
+    // which a key arrives on a device, and neither holds a passphrase.
+    await custody.store(TEST_DEK);
+    expect(await custody.status()).toBe('present');
+    expect(Array.from((await custody.load()) as Uint8Array)).toEqual(Array.from(TEST_DEK));
+  });
+
+  it('refuses a wrapper that is not even an object', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    for (const bad of [null, undefined, 'wrapper', 42]) {
+      await expect(custody.storeWrapped(bad)).rejects.toMatchObject({
+        code: SecurityErrorCode.KEY_CUSTODY_INVALID,
+      });
+    }
+    expect(storage.entries.size).toBe(0);
+  });
+
+  it('a malformed v2 envelope is unusable, not absent and not protected', async () => {
+    const storage = new Fake('os-keystore');
+    const custody = createKeyCustody(storage);
+    for (const bad of [
+      JSON.stringify({ v: 2 }),
+      JSON.stringify({ v: 2, w: null }),
+      JSON.stringify({ v: 2, w: 'wrapper' }),
+      JSON.stringify({ v: 3, w: {} }),
+    ]) {
+      storage.entries.set(STORAGE_KEY, bad);
+      await expect(custody.status(), bad).resolves.toBe('unusable');
+      await expect(custody.load(), bad).rejects.toThrow();
+    }
+  });
+});
+
 describe('OsKeystoreStorage', () => {
   /**
    * The platform this mock is standing in for.

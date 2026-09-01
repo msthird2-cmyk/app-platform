@@ -14,6 +14,7 @@ export type DataKeyStep =
   | 'show-code'
   | 'setup'
   | 'recover'
+  | 'unlock'
   | 'pair'
   | 'blocked'
   | 'ready';
@@ -42,6 +43,12 @@ export function dataKeyStep(
       return 'setup';
     case 'needs-recovery':
       return 'recover';
+    case 'locked':
+      // Never 'recover'. The key is on this device and the recovery code is not
+      // needed to reach it; sending the user to recovery here would spend a
+      // one-copy secret on a lock the passphrase opens. And never 'setup',
+      // which would write over the key that is sitting right there.
+      return 'unlock';
     case 'unusable':
       // Never 'setup'. A key is stored and unreadable; creating another over
       // the top of it orphans every record encrypted under the original.

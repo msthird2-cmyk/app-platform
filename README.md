@@ -18,7 +18,8 @@ apps/
 packages/
   utils/        dates, formatting, currency, validation, safe logging
   theme/        design tokens, ThemeProvider, ThemeSelector
-  security/     encryption, secure storage, recovery codes, app lock, sessions
+  security/     encryption, secure storage, recovery codes, key custody and
+                the optional data-key passphrase, app lock, sessions
   ui/           generic React Native components
   data/         repository, sync, import/export, validation, conflict handling
   auth/         login, signup, password reset, device verification
