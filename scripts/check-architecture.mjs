@@ -430,6 +430,79 @@ if (!existsSync(BACKUP_FLOW)) {
   }
 }
 
+// 3b. The backup flow keeps the size bound that used to be a Security Rule.
+//
+// While backups went to Cloud Storage, `storage.rules` refused an upload over
+// 25 MB. A backup is now a file off somebody's own filesystem, so nothing
+// stands between it and `JSON.parse` except this check — and it only counts if
+// it runs before the read.
+if (existsSync(BACKUP_FLOW)) {
+  const code = stripComments(readFileSync(BACKUP_FLOW, 'utf8'));
+  if (!/MAX_BACKUP_BYTES/.test(code)) {
+    failures.push(
+      'packages/backup/src/services/backupFlow.ts does not bound the import size. ' +
+        'The 25 MB ceiling came from storage.rules and has no other enforcer now.',
+    );
+  }
+  const sizeCheck = code.indexOf('MAX_BACKUP_BYTES');
+  const firstRead = code.indexOf('.read()');
+  if (sizeCheck >= 0 && firstRead >= 0 && sizeCheck > firstRead) {
+    failures.push(
+      'packages/backup/src/services/backupFlow.ts reads a chosen file before bounding it. ' +
+        'A limit applied after the allocation is documentation, not a limit.',
+    );
+  }
+}
+
+// 3c. Backup is a user-controlled file, and the core stays platform-free.
+//
+// Two failures this prevents. A platform import in the shared package would
+// tie backup to one runtime and put the size check somewhere a second adapter
+// could skip. A Firebase import would be the server-side transport growing
+// back — the arrangement that put a copy of every user's finances, and the
+// size and cadence of it, in Cloud Storage.
+for (const file of sources) {
+  const path = relative(ROOT, file);
+  if (!path.startsWith('packages/backup/src/')) continue;
+  const code = stripComments(readFileSync(file, 'utf8'));
+  const platform = code.match(/from\s*['"](expo[^'"]*|react-native|@react-native[^'"]*)['"]/);
+  // Components legitimately render, so only the non-component tree is checked.
+  if (platform && !path.includes('/components/')) {
+    failures.push(
+      `${path} imports ${platform[1]}. packages/backup is platform-free: an adapter ` +
+        'receives its platform modules injected, as createPlatformSecureStorage does.',
+    );
+  }
+  if (/from\s*['"](firebase[^'"]*|@platform\/firebase)['"]/.test(code)) {
+    failures.push(
+      `${path} imports Firebase. A backup never reaches a server; a transport that ` +
+        'named one would be the Cloud Storage copy growing back.',
+    );
+  }
+}
+
+// 3d. The server-side backup transport stays gone.
+//
+// Named explicitly rather than left to review. Reintroducing it would restore
+// both the copy and the metadata — size, record count, backup cadence — that
+// removing it was for, and it would do so without touching any rule.
+for (const file of sources) {
+  const path = relative(ROOT, file);
+  if (path.includes('/tests/') || path.endsWith('.test.ts')) continue;
+  const code = stripComments(readFileSync(file, 'utf8'));
+  if (/\bFirebaseBackupService\b/.test(code)) {
+    failures.push(
+      `${path} names FirebaseBackupService. Backups are user-controlled files; ` +
+        'the server-side transport was removed and must not return.',
+    );
+  }
+  if (/users\/\$\{[^}]*\}\/backups|users\/\{uid\}\/backups/.test(code)) {
+    failures.push(
+      `${path} addresses a server-side backups path. Nothing writes one.`,
+    );
+  }
+}
+
 // 4. No application screen or data module reaches persistence directly.
 //
 // The path is screen -> useRepository() -> EncryptingRepository -> whatever is

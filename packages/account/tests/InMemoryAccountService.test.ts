@@ -23,10 +23,9 @@ describe('deleteAccountFlow against a working service', () => {
 
     await deleteAccountFlow(service, callbacks(), { confirmed: true });
 
-    expect(service.remaining).toEqual({ collections: 0, backups: 0, secondary: 0, account: false });
+    expect(service.remaining).toEqual({ collections: 0, secondary: 0, account: false });
     expect(service.destructiveCalls).toEqual([
       'deleteUserData',
-      'deleteBackups',
       'deleteSecondaryRecords',
       'deleteAccount',
     ]);
@@ -44,7 +43,7 @@ describe('deleteAccountFlow against a working service', () => {
     });
 
     // The data is already gone and the account survives — recoverable, not orphaned.
-    expect(service.remaining).toMatchObject({ collections: 0, backups: 0, account: true });
+    expect(service.remaining).toMatchObject({ collections: 0, account: true });
   });
 
   it('keeps the data when the first step fails, so a retry is safe', async () => {

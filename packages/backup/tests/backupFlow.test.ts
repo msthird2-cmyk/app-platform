@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { runBackup, runRestore } from '../src/services/backupFlow';
 import { BackupErrorCode } from '../src/errors';
-import type { BackupService, BackupSummary, BackupProgress } from '../src/types/backup';
+import type { BackupTransport, BackupProgress } from '../src/types/backup';
 import {
   EncryptingRepository,
   InMemoryRepository,
   createRecord,
-  type EncryptedExportBundle,
   type EncryptedRepository,
 } from '@platform/data';
 import { PortableRecordCipher, WebCryptoService } from '@platform/security';
@@ -39,24 +38,29 @@ function encryptedRepository(): EncryptedRepository {
 const PASSPHRASE = 'correct1horse-battery';
 const NOW = 1_700_000_000_000;
 
-function memoryBackupService() {
-  const stored = new Map<string, EncryptedExportBundle>();
-  const summaries: BackupSummary[] = [];
-  const service: BackupService = {
-    list: async () => [...summaries],
-    upload: async (bundle, summary) => {
-      stored.set(summary.id, bundle);
-      summaries.push(summary);
-      return summary;
+/**
+ * Stands in for a share sheet and a file picker.
+ *
+ * An injected fake rather than a bypass: the flow still serialises, still hands
+ * the bytes to a transport, and still gets a `BackupFile` back with a size it
+ * did not compute itself. `open()` returns the most recent export, which is
+ * what re-importing a file you just saved amounts to.
+ */
+function memoryTransport() {
+  const saved: string[] = [];
+  const transport: BackupTransport = {
+    save: async (contents) => void saved.push(contents),
+    open: async () => {
+      const contents = saved.at(-1);
+      if (contents === undefined) return null;
+      return {
+        name: 'backup.json',
+        sizeBytes: contents.length,
+        read: async () => contents,
+      };
     },
-    download: async (id) => {
-      const bundle = stored.get(id);
-      if (!bundle) throw new Error('missing');
-      return bundle;
-    },
-    remove: async (id) => void stored.delete(id),
   };
-  return { service, stored };
+  return { transport, saved };
 }
 
 async function seededRepository() {
@@ -68,10 +72,10 @@ async function seededRepository() {
 }
 
 describe('runBackup', () => {
-  it('uploads only an encrypted payload', async () => {
+  it('saves only an encrypted payload', async () => {
     const repo = await seededRepository();
-    const { service, stored } = memoryBackupService();
-    const summary = await runBackup(repo, crypto, service, {
+    const { transport, saved } = memoryTransport();
+    const summary = await runBackup(repo, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets', 'liabilities'],
@@ -80,14 +84,16 @@ describe('runBackup', () => {
     });
 
     expect(summary.recordCount).toBe(3);
-    expect(JSON.stringify([...stored.values()])).not.toContain('Savings');
+    // The name is what the person will see in their file manager.
+    expect(summary.fileName).toMatch(/^net-worth-backup-\d{4}-\d{2}-\d{2}-[A-Za-z0-9_-]{8}\.json$/);
+    expect(saved.join('')).not.toContain('Savings');
   });
 
   it('reports progress and ends at done', async () => {
     const repo = await seededRepository();
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     const phases: BackupProgress['phase'][] = [];
-    await runBackup(repo, crypto, service, {
+    await runBackup(repo, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets'],
@@ -95,14 +101,14 @@ describe('runBackup', () => {
       now: NOW,
       onProgress: (progress) => phases.push(progress.phase),
     });
-    expect(phases).toEqual(['collecting', 'encrypting', 'uploading', 'done']);
+    expect(phases).toEqual(['collecting', 'encrypting', 'saving', 'done']);
   });
 
   it('refuses a weak passphrase before reading any data', async () => {
     const repo = await seededRepository();
-    const { service, stored } = memoryBackupService();
+    const { transport, saved } = memoryTransport();
     await expect(
-      runBackup(repo, crypto, service, {
+      runBackup(repo, crypto, transport, {
         appName: 'Net Worth',
         userId: 'user-1',
         collections: ['assets'],
@@ -110,12 +116,12 @@ describe('runBackup', () => {
         now: NOW,
       }),
     ).rejects.toMatchObject({ domain: 'security', code: 'PASSPHRASE_TOO_WEAK' });
-    expect(stored.size).toBe(0);
+    expect(saved).toHaveLength(0);
   });
 
   it('gives each backup a distinct identifier', async () => {
     const repo = await seededRepository();
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     const options = {
       appName: 'Net Worth',
       userId: 'user-1',
@@ -123,19 +129,19 @@ describe('runBackup', () => {
       passphrase: PASSPHRASE,
       now: NOW,
     };
-    const first = await runBackup(repo, crypto, service, options);
+    const first = await runBackup(repo, crypto, transport, options);
     // Same millisecond: the old timestamp-derived id would have collided and
     // silently replaced the earlier backup.
-    const second = await runBackup(repo, crypto, service, options);
+    const second = await runBackup(repo, crypto, transport, options);
     expect(first.id).not.toBe(second.id);
     expect(first.id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
   });
 
   it('requires a passphrase', async () => {
     const repo = await seededRepository();
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     await expect(
-      runBackup(repo, crypto, service, {
+      runBackup(repo, crypto, transport, {
         appName: 'Net Worth',
         collections: ['assets'],
         passphrase: '',
@@ -144,17 +150,17 @@ describe('runBackup', () => {
     ).rejects.toMatchObject({ code: BackupErrorCode.PASSPHRASE_REQUIRED });
   });
 
-  it('reports a failed phase when the upload fails', async () => {
+  it('reports a failed phase when saving fails', async () => {
     const repo = await seededRepository();
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     const phases: BackupProgress['phase'][] = [];
     await expect(
       runBackup(
         repo,
         crypto,
         {
-          ...service,
-          upload: async () => {
+          ...transport,
+          save: async () => {
             throw new Error('offline');
           },
         },
@@ -175,8 +181,8 @@ describe('runBackup', () => {
 describe('runRestore', () => {
   it('restores every record', async () => {
     const source = await seededRepository();
-    const { service } = memoryBackupService();
-    const summary = await runBackup(source, crypto, service, {
+    const { transport } = memoryTransport();
+    await runBackup(source, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets', 'liabilities'],
@@ -185,8 +191,7 @@ describe('runRestore', () => {
     });
 
     const target = encryptedRepository();
-    const result = await runRestore(target, crypto, service, {
-      backupId: summary.id,
+    const result = await runRestore(target, crypto, transport, {
       userId: 'user-1',
       appName: 'Net Worth',
       collections: ['assets', 'liabilities'],
@@ -201,8 +206,8 @@ describe('runRestore', () => {
   it('refuses a bundle naming a collection the application does not own', async () => {
     const source = encryptedRepository();
     await source.put('assets', createRecord('a1', { name: 'Savings' }, NOW));
-    const { service } = memoryBackupService();
-    const summary = await runBackup(source, crypto, service, {
+    const { transport } = memoryTransport();
+    await runBackup(source, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets'],
@@ -212,8 +217,7 @@ describe('runRestore', () => {
 
     const target = encryptedRepository();
     await expect(
-      runRestore(target, crypto, service, {
-        backupId: summary.id,
+      runRestore(target, crypto, transport, {
         userId: 'user-1',
         appName: 'Net Worth',
         collections: ['liabilities'],
@@ -227,8 +231,8 @@ describe('runRestore', () => {
   it('refuses a bundle belonging to another user', async () => {
     const source = encryptedRepository();
     await source.put('assets', createRecord('a1', {}, NOW));
-    const { service } = memoryBackupService();
-    const summary = await runBackup(source, crypto, service, {
+    const { transport } = memoryTransport();
+    await runBackup(source, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets'],
@@ -238,8 +242,7 @@ describe('runRestore', () => {
 
     const target = encryptedRepository();
     await expect(
-      runRestore(target, crypto, service, {
-        backupId: summary.id,
+      runRestore(target, crypto, transport, {
         userId: 'someone-else',
         appName: 'Net Worth',
         collections: ['assets'],
@@ -253,8 +256,8 @@ describe('runRestore', () => {
   it('refuses a bundle belonging to another application', async () => {
     const source = encryptedRepository();
     await source.put('assets', createRecord('a1', {}, NOW));
-    const { service } = memoryBackupService();
-    const summary = await runBackup(source, crypto, service, {
+    const { transport } = memoryTransport();
+    await runBackup(source, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets'],
@@ -263,8 +266,7 @@ describe('runRestore', () => {
     });
 
     await expect(
-      runRestore(encryptedRepository(), crypto, service, {
-        backupId: summary.id,
+      runRestore(encryptedRepository(), crypto, transport, {
         userId: 'user-1',
         appName: 'Expense',
         collections: ['assets'],
@@ -275,10 +277,9 @@ describe('runRestore', () => {
   });
 
   it('refuses to overwrite without confirmation', async () => {
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     await expect(
-      runRestore(encryptedRepository(), crypto, service, {
-        backupId: 'b1',
+      runRestore(encryptedRepository(), crypto, transport, {
         userId: 'user-1',
         appName: 'Net Worth',
         collections: ['assets'],
@@ -290,8 +291,8 @@ describe('runRestore', () => {
 
   it('leaves the target untouched when the passphrase is wrong', async () => {
     const source = await seededRepository();
-    const { service } = memoryBackupService();
-    const summary = await runBackup(source, crypto, service, {
+    const { transport } = memoryTransport();
+    await runBackup(source, crypto, transport, {
       appName: 'Net Worth',
       userId: 'user-1',
       collections: ['assets'],
@@ -301,8 +302,7 @@ describe('runRestore', () => {
 
     const target = encryptedRepository();
     await expect(
-      runRestore(target, crypto, service, {
-        backupId: summary.id,
+      runRestore(target, crypto, transport, {
         userId: 'user-1',
         appName: 'Net Worth',
         collections: ['assets'],
@@ -329,9 +329,9 @@ describe('the encryption boundary these flows require', () => {
   const unencrypting = () => new InMemoryRepository() as unknown as EncryptedRepository;
 
   it('refuses to back up from a repository that does not encrypt', async () => {
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     await expect(
-      runBackup(unencrypting(), crypto, service, {
+      runBackup(unencrypting(), crypto, transport, {
         appName: 'Net Worth',
         userId: 'user-1',
         collections: ['assets'],
@@ -342,7 +342,7 @@ describe('the encryption boundary these flows require', () => {
   });
 
   it('refuses before it reads anything, so a rejected backup touches no record', async () => {
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     const inner = new InMemoryRepository();
     let reads = 0;
     const counting = new Proxy(inner, {
@@ -352,7 +352,7 @@ describe('the encryption boundary these flows require', () => {
       },
     }) as unknown as EncryptedRepository;
     await expect(
-      runBackup(counting, crypto, service, {
+      runBackup(counting, crypto, transport, {
         appName: 'Net Worth',
         userId: 'user-1',
         collections: ['assets'],
@@ -364,10 +364,9 @@ describe('the encryption boundary these flows require', () => {
   });
 
   it('refuses to restore into a repository that does not encrypt', async () => {
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     await expect(
-      runRestore(unencrypting(), crypto, service, {
-        backupId: 'anything',
+      runRestore(unencrypting(), crypto, transport, {
         userId: 'user-1',
         appName: 'Net Worth',
         collections: ['assets'],
@@ -378,11 +377,10 @@ describe('the encryption boundary these flows require', () => {
   });
 
   it('refuses before the confirmation check, so nothing is written either way', async () => {
-    const { service } = memoryBackupService();
+    const { transport } = memoryTransport();
     const target = new InMemoryRepository();
     await expect(
-      runRestore(target as unknown as EncryptedRepository, crypto, service, {
-        backupId: 'anything',
+      runRestore(target as unknown as EncryptedRepository, crypto, transport, {
         userId: 'user-1',
         appName: 'Net Worth',
         collections: ['assets'],
