@@ -22,11 +22,6 @@ export async function createTestEnvironment(): Promise<RulesTestEnvironment> {
       host: '127.0.0.1',
       port: 8181,
     },
-    storage: {
-      rules: readFileSync('storage.rules', 'utf8'),
-      host: '127.0.0.1',
-      port: 9199,
-    },
   });
 }
 

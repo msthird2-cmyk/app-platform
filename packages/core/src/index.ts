@@ -4,7 +4,7 @@ export {
   useServices,
   useAppConfig,
   useAccountService,
-  useBackupService,
+  useBackupTransport,
   useRepository,
   useCryptoService,
   type PlatformServices,

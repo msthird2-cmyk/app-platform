@@ -76,7 +76,7 @@ export default function App({
       collections={COLLECTIONS}
       authService={services.authService}
       accountService={services.accountService}
-      backupService={services.backupService}
+      backupTransport={services.backupTransport}
       repository={services.repository}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}

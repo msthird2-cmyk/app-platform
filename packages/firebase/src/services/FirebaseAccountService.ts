@@ -10,7 +10,6 @@ import {
   writeBatch,
   type Firestore,
 } from 'firebase/firestore';
-import { deleteObject, listAll, ref, getStorage, type FirebaseStorage } from 'firebase/storage';
 import type { FirebaseApp } from 'firebase/app';
 import type { AccountService, UserProfile, AccountErrorCode } from '@platform/account';
 import { accountError } from '../errors';
@@ -31,7 +30,6 @@ const CLIENT_WRITABLE_PROFILE_FIELDS = ['displayName'] as const;
 export class FirebaseAccountService implements AccountService {
   private readonly auth: Auth;
   private readonly db: Firestore;
-  private readonly storage: FirebaseStorage;
 
   constructor(
     app: FirebaseApp,
@@ -39,7 +37,6 @@ export class FirebaseAccountService implements AccountService {
   ) {
     this.auth = getAuth(app);
     this.db = getFirestore(app);
-    this.storage = getStorage(app);
   }
 
   private requireUserId(): string {
@@ -107,15 +104,6 @@ export class FirebaseAccountService implements AccountService {
     }
   }
 
-  /** Storage listings are one level deep, so nested prefixes need recursion. */
-  private async purgeStoragePrefix(path: string): Promise<void> {
-    const listing = await listAll(ref(this.storage, path));
-    await Promise.all(listing.items.map((item) => deleteObject(item)));
-    for (const prefix of listing.prefixes) {
-      await this.purgeStoragePrefix(prefix.fullPath);
-    }
-  }
-
   /** Step 3 — encrypted records first, while the account can still authenticate. */
   async deleteUserData(): Promise<void> {
     const userId = this.requireUserId();
@@ -128,18 +116,7 @@ export class FirebaseAccountService implements AccountService {
     }
   }
 
-  /** Step 4 — backups and file storage. */
-  async deleteBackups(): Promise<void> {
-    const userId = this.requireUserId();
-    try {
-      await this.purgeCollection(`users/${userId}/backups`);
-      await this.purgeStoragePrefix(`users/${userId}/backups`);
-    } catch (cause) {
-      throw accountError('BACKUP_DELETION_FAILED' satisfies AccountErrorCode, cause);
-    }
-  }
-
-  /** Step 5 — devices, settings and any other secondary record. */
+  /** Step 4 — devices, settings and any other secondary record. */
   async deleteSecondaryRecords(): Promise<void> {
     const userId = this.requireUserId();
     try {
@@ -155,7 +132,7 @@ export class FirebaseAccountService implements AccountService {
     }
   }
 
-  /** Step 6 — the authentication account, only once its data is gone. */
+  /** Step 5 — the authentication account, only once its data is gone. */
   async deleteAccount(): Promise<void> {
     const user = this.auth.currentUser;
     if (!user) throw accountError('REAUTHENTICATION_REQUIRED' satisfies AccountErrorCode);

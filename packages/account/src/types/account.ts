@@ -22,11 +22,16 @@ export interface AccountService {
   hasPendingDeletion(): Promise<boolean>;
   /** Step 3 — encrypted user data. */
   deleteUserData(): Promise<void>;
-  /** Step 4 — backups and file storage. */
-  deleteBackups(): Promise<void>;
-  /** Step 5 — secondary records such as devices, settings, audit entries. */
+  /**
+   * Step 4 — secondary records such as devices, settings, audit entries.
+   *
+   * There is no backup step. Backups are encrypted files the person exported
+   * and keeps themselves, so the application has nothing to delete and could
+   * not reach them if it did — see `docs/ARCHITECTURE.md`, "Backup and restore
+   * security". A step that deleted nothing would imply otherwise.
+   */
   deleteSecondaryRecords(): Promise<void>;
-  /** Step 6 — the authentication account itself. Always last. */
+  /** Step 5 — the authentication account itself. Always last. */
   deleteAccount(): Promise<void>;
   exportUserData(): Promise<unknown>;
 }
@@ -46,7 +51,6 @@ export type DeletionStep =
   | 'journal'
   | 'reauthenticate'
   | 'delete-user-data'
-  | 'delete-backups'
   | 'delete-secondary-records'
   | 'delete-account'
   | 'clear-local-state'
@@ -57,7 +61,6 @@ export const DELETION_STEPS: readonly DeletionStep[] = [
   'reauthenticate',
   'journal',
   'delete-user-data',
-  'delete-backups',
   'delete-secondary-records',
   'delete-account',
   'clear-local-state',

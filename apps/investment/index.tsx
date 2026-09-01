@@ -10,7 +10,6 @@ import {
 } from '@platform/security';
 import { InMemoryAuthService } from '@platform/auth';
 import { InMemoryAccountService } from '@platform/account';
-import { InMemoryBackupService } from '@platform/backup';
 import App from './App';
 
 /**
@@ -27,7 +26,6 @@ const accountService = new InMemoryAccountService({
   profile: { id: 'preview', email: 'you@example.com', displayName: 'You', createdAt: 0 },
 });
 
-const backupService = new InMemoryBackupService();
 
 /**
  * Secure storage is chosen here, at the composition root, and injected — the
@@ -95,7 +93,7 @@ function Root() {
   }
   if (!custody) return <View style={{ flex: 1 }} />;
 
-  return <App authService={authService} accountService={accountService} backupService={backupService} secureStorage={custody.secureStorage} minimumProtection={custody.minimumProtection} />;
+  return <App authService={authService} accountService={accountService} secureStorage={custody.secureStorage} minimumProtection={custody.minimumProtection} />;
 }
 
 registerRootComponent(Root);

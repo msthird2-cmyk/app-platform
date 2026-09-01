@@ -41,7 +41,7 @@ service cloud.firestore {
     // than an allowlist: an application may add any field it likes except one
     // that could be confused for authorization state. The stronger allowlist
     // form is already used where the shape is known (`isProfileShape`,
-    // `isBackupSummary`); extending it to records is a schema change, not a
+    // `isRecoveryEscrow`); extending it to records is a schema change, not a
     // rules change, and waits for the encrypted record envelope.
     //
     // `hasAny` matches whole keys, so a legitimate `planName` or
@@ -162,26 +162,13 @@ service cloud.firestore {
 
     // ---- backups ---------------------------------------------------------
 
-    // Metadata only. The ciphertext lives in Cloud Storage; nothing here may
-    // carry record content.
-    function isBackupSummary(backupId) {
-      return backupId.matches('^[A-Za-z0-9_-]{1,64}$')
-        && request.resource.data.keys()
-             .hasOnly(['id', 'createdAt', 'sizeBytes', 'recordCount', 'appName'])
-        && request.resource.data.id == backupId
-        && request.resource.data.createdAt is int
-        && request.resource.data.sizeBytes is int
-        && request.resource.data.recordCount is int
-        && request.resource.data.appName is string;
-    }
-
-    match /users/{uid}/backups/{backupId} {
-      allow get, list: if isOwner(uid);
-      allow create: if isOwner(uid) && isBackupSummary(backupId);
-      // Immutable once written, so a backup cannot be silently replaced.
-      allow update: if false;
-      allow delete: if isOwner(uid);
-    }
+    // There is no backup path, and that is the design rather than an omission.
+    // A backup is an encrypted file the person exported and keeps themselves:
+    // the server never receives one, so there is nothing here to authorise and
+    // no metadata — size, record count, cadence — for an operator to read.
+    // `users/{uid}/backups` therefore falls to the record rule above, which
+    // refuses it because `backups` is not a record collection, and then to the
+    // default deny at the bottom.
 
     // ---- deletion journal ------------------------------------------------
 
@@ -227,7 +214,7 @@ service cloud.firestore {
     // is escrow rather than a factor" — which also records that the
     // authentication form may be added alongside this one later.
     //
-    // The shape is an allowlist rather than a denylist, like `isBackupSummary`:
+    // The shape is an allowlist rather than a denylist, like `isProfileShape`:
     // the fields are fully known, so anything else is a mistake. In particular
     // there is no room for a digest, checksum or verifier of the key or the
     // code. Such a field would let anyone holding this document test candidate

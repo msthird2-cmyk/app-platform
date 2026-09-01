@@ -64,13 +64,6 @@ export async function deleteAccountFlow(
   }
 
   try {
-    await service.deleteBackups();
-    step('delete-backups');
-  } catch (cause) {
-    throw new AccountError(AccountErrorCode.BACKUP_DELETION_FAILED, cause);
-  }
-
-  try {
     await service.deleteSecondaryRecords();
     step('delete-secondary-records');
   } catch (cause) {
@@ -109,9 +102,6 @@ export async function deleteUserDataFlow(
     await service.deleteUserData();
     completed.push('delete-user-data');
     callbacks.onProgress?.('delete-user-data');
-    await service.deleteBackups();
-    completed.push('delete-backups');
-    callbacks.onProgress?.('delete-backups');
   } catch (cause) {
     throw new AccountError(AccountErrorCode.DATA_DELETION_FAILED, cause);
   }
