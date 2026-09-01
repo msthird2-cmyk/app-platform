@@ -34,6 +34,13 @@ export {
 } from './PairDeviceContext';
 export { BackupControls, type BackupControlsProps } from './BackupControls';
 export {
+  PassphraseProvider,
+  PassphraseControls,
+  useDataKeyPassphrase,
+  type DataKeyPassphrase,
+  type PassphraseControlsProps,
+} from './PassphraseContext';
+export {
   EncryptedRepositoryProvider,
   type EncryptedRepositoryProviderProps,
 } from './EncryptedRepositoryProvider';
