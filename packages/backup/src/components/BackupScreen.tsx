@@ -1,36 +1,46 @@
 import { useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { AppText, Button, ConfirmDialog, ListRow, Screen, TextField } from '@platform/ui';
+import { AppText, Button, ConfirmDialog, Screen, TextField } from '@platform/ui';
 import { spacing } from '@platform/theme';
-import { errorCode, formatDate } from '@platform/utils';
+import { errorCode } from '@platform/utils';
 import { BackupStatus } from './BackupStatus';
-import type { BackupProgress, BackupSettings, BackupSummary } from '../types/backup';
+import type { BackupProgress, BackupSettings } from '../types/backup';
 
+/**
+ * Two actions, and no list.
+ *
+ * There is nothing to list: the application does not keep backups. An export
+ * produces one encrypted file and hands it to the person, who decides where it
+ * lives, and an import asks them for a file back. A list here would be a list
+ * of things the server holds, which is exactly what this design removed — and
+ * showing one would tell the person something untrue about where their data is.
+ *
+ * The copy says so plainly, in both directions: the file is theirs to keep, and
+ * nobody can open it or recover it for them without the passphrase.
+ */
 export interface BackupScreenProps {
   settings: BackupSettings;
-  backups: readonly BackupSummary[];
   now: number;
   progress?: BackupProgress;
   messageForCode: (code: string) => string;
   labelForState: (state: 'fresh' | 'due' | 'overdue' | 'never') => string;
-  onBackup: (passphrase: string) => Promise<void>;
-  onRestore: (backupId: string, passphrase: string) => Promise<void>;
+  onExport: (passphrase: string) => Promise<void>;
+  onImport: (passphrase: string) => Promise<void>;
 }
 
 export function BackupScreen({
   settings,
-  backups,
   now,
   progress,
   messageForCode,
   labelForState,
-  onBackup,
-  onRestore,
+  onExport,
+  onImport,
 }: BackupScreenProps) {
   const [passphrase, setPassphrase] = useState('');
   const [issue, setIssue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
+  const [confirmingImport, setConfirmingImport] = useState(false);
 
   const run = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -52,51 +62,58 @@ export function BackupScreen({
         labelForState={labelForState}
         {...(progress ? { progress } : {})}
       />
+
       <TextField
         label="Backup passphrase"
         value={passphrase}
         onChangeText={setPassphrase}
         secureTextEntry
-        hint="Your backup is encrypted with this passphrase. It is never uploaded."
+        hint="This passphrase encrypts the file. It is never sent anywhere, and it cannot be reset — without it the backup cannot be opened, by you or by anyone else."
       />
+
       {issue ? (
         <AppText variant="meta" tone="down">
           {messageForCode(issue)}
         </AppText>
       ) : null}
-      <Button label="Back up now" loading={busy} onPress={() => void run(() => onBackup(passphrase))} />
 
-      <View style={styles.list}>
-        <AppText variant="title">Available backups</AppText>
-        {backups.map((backup) => (
-          <ListRow
-            key={backup.id}
-            title={formatDate(new Date(backup.createdAt))}
-            meta={`${backup.recordCount} records`}
-            value="Restore"
-            onPress={() => setRestoreTarget(backup.id)}
-          />
-        ))}
+      <Button
+        label="Export backup"
+        loading={busy}
+        onPress={() => void run(() => onExport(passphrase))}
+      />
+      <AppText variant="meta">
+        Your backup is an encrypted file. Save it somewhere you control — your
+        cloud drive, your computer, or send it to yourself. This app does not
+        keep a copy, so a backup you do not save is a backup you do not have.
+      </AppText>
+
+      <View style={styles.import}>
+        <AppText variant="title">Restore from a file</AppText>
+        <Button
+          label="Import backup"
+          variant="secondary"
+          loading={busy}
+          onPress={() => setConfirmingImport(true)}
+        />
       </View>
 
       <ConfirmDialog
-        visible={restoreTarget !== null}
-        title="Restore this backup?"
-        description="Restoring replaces the records on this device with the ones in the backup."
-        confirmLabel="Restore"
+        visible={confirmingImport}
+        title="Restore from this backup?"
+        description="Restoring replaces the records on this device with the ones in the file you choose."
+        confirmLabel="Choose file"
         destructive
         busy={busy}
         onConfirm={() => {
-          const target = restoreTarget;
-          if (!target) return;
-          void run(() => onRestore(target, passphrase)).then(() => setRestoreTarget(null));
+          void run(() => onImport(passphrase)).then(() => setConfirmingImport(false));
         }}
-        onCancel={() => setRestoreTarget(null)}
+        onCancel={() => setConfirmingImport(false)}
       />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { gap: spacing.xs, marginTop: spacing.lg },
+  import: { gap: spacing.xs, marginTop: spacing.lg },
 });
