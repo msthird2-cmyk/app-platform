@@ -374,12 +374,66 @@ there is no recovery-code hash, which is the *other* mechanism: that lives at
 trusted server. Escrow needs no server, so it ships now; the authentication form
 can be added beside it later, exactly as stated above.
 
-**Why the passphrase is optional and is not the DEK.** It exists because some
-users want a recovery path they can hold in their head rather than on paper. It
-wraps the DEK exactly as the recovery code does — one more wrapped copy. It is
-optional because requiring it would make every record read wait on a human, and
-it is not the DEK because deriving the key from it reintroduces every problem
-above.
+**Why the data-key passphrase is optional and is not the DEK.** This document
+used to describe it as "a recovery path they can hold in their head" and "one
+more wrapped copy". What shipped is neither, and the difference matters enough
+to correct here rather than leave two readings in circulation.
+
+It is not a recovery path. A recovery path has to survive the device, so it is
+escrowed; a passphrase that could be recovered from the server would be worth
+no more than the account password. It is not an additional wrapped copy either:
+it replaces the plain envelope in the same custody slot, so a device is either
+protected or not. Forgetting it therefore costs that device, not the data —
+the recovery code opens the escrow on a fresh install, independently, exactly
+as it did before.
+
+What it is, is protection for a device at rest. Key custody puts the DEK in the
+OS keystore and the keystore hands it back to anything running as this
+application; `requireAuthentication` is deliberately off, because a biometric
+prompt blocks the JavaScript thread and a background sync has no user to
+prompt. `ProtectionTier` is explicit that `os-keystore` "says nothing about
+hardware" — there is no attestation, so on a software-backed keystore the only
+thing between somebody holding the device and the key is software. A passphrase
+makes it something they must also know.
+
+It is optional because requiring it would put a human in front of every cold
+start and, worse, in front of recovery — and it is not the DEK because deriving
+the key from it reintroduces every problem above. Setup, recovery and pairing
+adoption all still write the unprotected form, deliberately: each is a moment at
+which a key *arrives* on a device, and none of them holds a passphrase.
+
+The construction is the recovery escrow's, with a different secret and the
+purpose `data-key-wrapper.v1` — the same `CryptoService`, the same AES-GCM
+envelope, the same KDF at the same cost, the same `assertSupportedPayload`
+bounds. No new cryptography and no new dependency. The purpose string is what
+stops one being replayed as the other, so a recovery code cannot open a wrapper
+and a passphrase cannot open an escrow. The two absences noted above for the
+escrow document apply here too and for the same reason: no verifier, no digest,
+no hint, because any of them would let whoever holds the stored envelope test
+guesses without paying for a derivation.
+
+Custody gains a fourth state, `protected`, for the same reason it has
+`unusable`: it is a state in which a key exists and cannot be read, and
+collapsing it into `absent` would send a caller to first-time setup, which
+writes a new key over a real one. `load()` throws `DATA_KEY_LOCKED` rather than
+returning `null`. Above it the lifecycle gains `locked`, which the gate renders
+as a passphrase prompt with no recovery button — sending a user to recovery for
+a passphrase they may simply be mistyping would spend a one-copy secret on a
+lock the passphrase opens. `recover` and `adoptPairedKey` both refuse a
+`protected` device, so neither can drop the protection as a side effect, and
+`exportForPairing` routes through `load()`, so a device cannot hand out a key it
+has not itself unlocked.
+
+The opened key is held for the session, because re-deriving it costs about
+twenty-five seconds at the shipped KDF cost and the repository asks for the key
+on every operation. The *passphrase* is never held: it exists inside the call
+that uses it and nowhere else, which `scripts/check-architecture.mjs` enforces
+against persistence, logging and network sinks alike.
+
+**What the passphrase does not defend against.** An attacker who has the device
+*while the app is running and unlocked* has the key, exactly as before; the
+window this closes is a device at rest. It is not a second factor for the
+account, and it is not protection against a compromised OS.
 
 **Why it is shared.** Encryption is the most expensive thing to get wrong and
 the worst thing to have three versions of. Every application here stores records
@@ -408,7 +462,7 @@ theatre — the attacker's easiest move is then to make the key look unavailable
 
 The guarantee is expressed as a tier — `os-keystore`, `browser-nonextractable`, `memory` — rather than as a `hardwareBacked` boolean, because the boolean promised something no implementation can check. `expo-secure-store` offers `isAvailableAsync` and `canUseBiometricAuthentication` and nothing that reports whether the underlying keystore key is hardware-backed. A store setting such a flag would be asserting a fact it has no way to establish, which is the same defect that removed client-side device verification from this codebase. A tier is a claim an implementation can stand behind.
 
-Key custody is deliberately narrower than the storage interface, and deliberately cannot create a key. The reason is one specific failure: on Android, a keystore key invalidated by a lock-screen change leaves the stored ciphertext intact and unreadable. Code that treats "cannot read" as "nothing stored" will generate a replacement key and silently orphan every record encrypted under the original — the user's data still exists and can never be opened again. So the three states are `absent`, `present` and `unusable`, `load()` returns `null` for absence alone, and generation lives somewhere else entirely.
+Key custody is deliberately narrower than the storage interface, and deliberately cannot create a key. The reason is one specific failure: on Android, a keystore key invalidated by a lock-screen change leaves the stored ciphertext intact and unreadable. Code that treats "cannot read" as "nothing stored" will generate a replacement key and silently orphan every record encrypted under the original — the user's data still exists and can never be opened again. So the states are `absent`, `present`, `protected` and `unusable`; `load()` returns `null` for absence alone, throwing for the other two; and generation lives somewhere else entirely. `protected` is a passphrase-wrapped key — present, and shut to custody, which holds no passphrase and can open nothing. It is a separate state from `unusable` for the same reason `unusable` is separate from `absent`: nothing is broken, and the passphrase opens it.
 
 Web storage is a different threat model. Never store passwords, recovery codes, encryption keys or long-lived authentication secrets in plain `localStorage`. Prefer in-memory handling or a specifically reviewed browser mechanism and document the residual risk.
 
@@ -597,6 +651,9 @@ Before connecting the first real Firebase project or creating real user data:
 11. Account deletion has an explicit Spark limitation or trusted server strategy.
 12. CI executes the security tests.
 13. No security finding is marked accepted without a written rationale.
+14. Where an optional data-key passphrase is offered, it is never persisted,
+    logged or transmitted, it never gates recovery, and a locked key is never
+    reported as an absent one.
 
 ## Migration discipline
 

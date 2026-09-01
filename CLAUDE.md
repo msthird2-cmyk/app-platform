@@ -265,12 +265,11 @@ Approved design, now **partly implemented**. What exists today:
 | Trusted-device pairing — application integration | implemented — `pairingSession.ts`, `PairingFlow`, `DataKeyGate`; **offered only where a relay is injected** |
 | Production Firebase application wiring | **Net Worth only** — selected by `EXPO_PUBLIC_NETWORTH_BACKEND`; Investment and Expense remain in-memory |
 | Encryption boundary enforced structurally | implemented — `EncryptedRepository`, `useRepository()`, `backupFlow`, four architecture guards |
-| Optional passphrase wrapper | **not implemented** |
+| Optional data-key passphrase (Gate 7) | implemented — `dataKeyWrapper.ts`, custody `protected`, lifecycle `locked`, `PassphraseControls` |
 
 The reasoning behind each rule is in `docs/ARCHITECTURE.md`. The rules below
-still govern the passphrase wrapper, which does not exist, and continue to
-govern everything that does — they are recorded so that no later step ships a
-weaker version of them.
+govern everything above — they are recorded so that no later step ships a weaker
+version of them.
 
 Domain records are encrypted on the device before they are persisted to
 Firestore. A randomly generated **Data Encryption Key (DEK)** encrypts them, and
@@ -283,14 +282,21 @@ Random DEK
    |
    +--> wrapped for trusted-device transfer          (ECDH transport key)
    |
-   +--> wrapped for recovery-code recovery
+   +--> wrapped for recovery-code recovery                (escrowed, off-device)
    |
-   +--> optionally wrapped for encryption-passphrase recovery
+   +--> optionally wrapped under a passphrase, in custody  (this device, at rest)
 ```
 
 Every path wraps the *same* DEK. None of them is the DEK and none derives it:
 the DEK is random, never a deterministic function of anything the user types. A
 passphrase change rewrites one wrapped copy and re-encrypts no records.
+
+The last two differ in kind, and the difference is load-bearing. The escrow is a
+*copy*, off the device, which is what makes it a recovery path. The passphrase
+wrapper *replaces* the plain envelope in the same custody slot, so a device is
+either protected or not — it is protection for a device at rest, never a
+recovery path, and it is never escrowed. That is the whole reason forgetting it
+is survivable.
 
 **Multi-device onboarding — trusted-device pairing.** Implemented. An already
 trusted, unlocked device approves the new one; both sides establish a shared
@@ -386,9 +392,26 @@ client-side secret comparison. A server-side recovery-code *authentication*
 mechanism is a separate capability for when Blaze or other server infrastructure
 exists; it does not replace this one.
 
-**Optional encryption passphrase.** Not yet implemented. A user may additionally set a passphrase
-that wraps the DEK, giving a second local recovery path. It is optional, not
-required for normal record access, and must never be used as the DEK itself.
+**Optional data-key passphrase.** Implemented (Gate 7). Earlier revisions of
+this file called it "a second local recovery path". That framing was wrong and
+is corrected here: a passphrase that could recover data would have to be
+escrowed, and an escrowed passphrase is worth no more than the account password.
+
+What it is instead: a passphrase in front of the key this device already holds.
+The gap it closes is that the OS keystore hands the DEK to anything running as
+this application — `requireAuthentication` is deliberately off, because a
+biometric prompt blocks the JavaScript thread and a background sync has no user
+to prompt — and `os-keystore` says nothing about hardware, so on a
+software-backed keystore only software stands between a device at rest and the
+key.
+
+It is optional, off by default, and never required for recovery: the recovery
+code opens the escrow independently, so forgetting the passphrase costs that
+device and not the data. It is never the DEK itself. Setup, recovery and pairing
+adoption all keep writing the unprotected envelope, deliberately — each is a
+moment at which a key *arrives* on a device and none of them holds a passphrase.
+There is no "remove passphrase": its failure mode is silent, and nothing needs
+it.
 
 **Where it lives.** Record encryption is a shared platform capability, behind
 the shared security and data abstractions, so NetWorth Tracker, BolKhaata,
@@ -463,9 +486,11 @@ These hold at every stage of implementation, including partial ones.
   is enabled.
 - No silent plaintext fallback when the encryption key is unavailable.
 - A missing key fails closed.
-- Losing all trusted devices is recoverable through the recovery code and/or the
-  optional encryption passphrase. The recovery-code half of this is implemented
-  (Gate 3); the passphrase wrapper is not.
+- Losing all trusted devices is recoverable through the recovery code (Gate 3),
+  and through nothing else. The optional data-key passphrase (Gate 7) is
+  explicitly *not* a recovery path — it protects a device at rest, is never
+  escrowed, and must never become a thing a user can lose their data by
+  forgetting.
 - A recovery attempt never generates a key. Missing or unopenable escrow fails
   closed, because minting a replacement would orphan every record encrypted
   under the original while appearing to succeed.
@@ -484,7 +509,7 @@ Every implementation reports a **protection tier**, and callers compare against 
 
 A caller states its minimum (`os-keystore` by default) and construction throws when the store falls short. There is no degraded mode and no plaintext fallback. `memory` is not expressible as a minimum, by type.
 
-**Key custody.** A data encryption key is held through `createKeyCustody`, which loads, stores and clears an existing key and **never creates one**. Its `status()` distinguishes `absent` from `present` from `unusable`, and that distinction is load-bearing: an entry that exists but cannot be read — an Android keystore key invalidated by a lock-screen change, say — must never be reported as absent, or the caller will mint a replacement and orphan every record encrypted under the original. `load()` returns `null` only for a genuine absence and throws for everything else.
+**Key custody.** A data encryption key is held through `createKeyCustody`, which loads, stores and clears an existing key and **never creates one**. Its `status()` distinguishes `absent` from `present` from `protected` from `unusable`, and that distinction is load-bearing: an entry that exists but cannot be read — an Android keystore key invalidated by a lock-screen change, say — must never be reported as absent, or the caller will mint a replacement and orphan every record encrypted under the original. `load()` returns `null` only for a genuine absence and throws for everything else — including `protected`, a passphrase-wrapped key that is present and shut, which custody stores and hands back but cannot open.
 
 On web, never persist passwords, recovery codes, encryption keys or long-lived authentication secrets in plain `localStorage`. Prefer in-memory handling or a specifically reviewed browser mechanism with documented threat limitations.
 

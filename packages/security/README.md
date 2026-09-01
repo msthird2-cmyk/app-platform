@@ -59,7 +59,8 @@ const records = await hashRecoveryCodes(codes, crypto, { now: Date.now() });
 | `OsKeystoreStorage`, `SecureStoreBackend` | Android Keystore / iOS Keychain, over an injected `expo-secure-store` module |
 | `WebNonExtractableStorage`, `createIndexedDbDatabase` | Browser tier: values sealed under a non-extractable WebCrypto key in IndexedDB |
 | `createPlatformSecureStorage` | Picks the strongest store the runtime provides; throws when neither tier is available |
-| `KeyCustody`, `KeyCustodyStatus`, `createKeyCustody` | Custody of an existing data encryption key — `absent` / `present` / `unusable`, and never creates one |
+| `KeyCustody`, `KeyCustodyStatus`, `createKeyCustody` | Custody of an existing data encryption key — `absent` / `present` / `protected` / `unusable`, and never creates one |
+| `wrapDataKey`, `unwrapDataKey`, `changeDataKeyPassphrase`, `WrappedDataKey`, `assertWrappedDataKey`, `DATA_KEY_WRAPPER_PURPOSE` | The optional passphrase around the data key. The recovery escrow's construction with a different secret and its own purpose |
 | `InMemorySecureStorage`, `BiometricsService`, `UnavailableBiometrics` | Test double and biometric interface plus fallback |
 | `generateRecoveryCodes`, `hashRecoveryCodes`, `verifyRecoveryCode`, `remainingRecoveryCodes` | Single-use, expiring recovery codes stored as salted hashes. Generation takes the platform's entropy source, like `PortableCryptoService` |
 | `RandomBytes`, `drawRandomBytes` | The one entropy contract. Injected from the composition root and validated on every draw |
@@ -96,7 +97,7 @@ PBKDF2 in JavaScript is roughly an order of magnitude slower than the native imp
 
 Two things about the tiers are worth stating plainly. `os-keystore` means the platform's secure storage is in use and **nothing more** — `expo-secure-store` cannot tell anyone whether the key is in hardware, so no implementation claims it is. And `browser-nonextractable` is a genuinely weaker tier: the wrapping key cannot be exported, but any script running in the origin can still use it, so a caller has to opt into that tier explicitly rather than arriving there by accident.
 
-Custody never creates a key. `load()` returns `null` for a genuine absence and throws for anything else, because an entry that exists and cannot be read — an Android keystore key invalidated by a lock-screen change — must not be mistaken for no key at all. Mint a replacement in that situation and every record encrypted under the original is orphaned while still sitting in the database.
+Custody never creates a key. `load()` returns `null` for a genuine absence and throws for anything else, because an entry that exists and cannot be read — an Android keystore key invalidated by a lock-screen change — must not be mistaken for no key at all. Mint a replacement in that situation and every record encrypted under the original is orphaned while still sitting in the database. `protected` is the same argument applied to a passphrase-wrapped key: present, shut, and openable by exactly one thing, which custody does not hold.
 
 Recovery-code verification is deliberately *not* wired to any storage. Comparing a code on the client means handing the client the hash list to compare against, so the Firestore rules close that path; a trusted server has to own the check.
 
@@ -105,6 +106,48 @@ Recovery-code verification is deliberately *not* wired to any storage. Comparing
 ```
 pnpm --filter @platform/security test
 ```
+
+## The data-key passphrase
+
+`dataKeyWrapper.ts` puts a passphrase in front of the key this device already
+holds. It closes one specific gap: the keystore hands the DEK to anything
+running as this application — `requireAuthentication` is off, because a
+biometric prompt blocks the JavaScript thread and a background sync has no user
+to prompt — and `os-keystore` says nothing about hardware, so on a
+software-backed keystore only software stands between a device at rest and the
+key.
+
+```ts
+await lifecycle.protect(passphrase);           // wraps the key already in custody
+const key = await lifecycle.unlock(passphrase); // once per cold start
+await lifecycle.changePassphrase(current, next);
+lifecycle.lock();                               // forgets the opened copy
+```
+
+What it deliberately is not:
+
+- **Not a recovery path.** The recovery code opens the escrow independently, so
+  forgetting the passphrase costs this device and not the data. Setup, recovery
+  and pairing adoption all still write the unprotected envelope, because each is
+  a moment at which a key *arrives* and none of them holds a passphrase.
+- **Not a second layer around records.** Only the 32-byte DEK is wrapped, so
+  changing a passphrase re-wraps a key rather than re-encrypting a portfolio,
+  and no record envelope, AAD or format changes at all.
+- **Not new cryptography.** Same `CryptoService`, same AES-GCM envelope, same
+  KDF cost, same `assertSupportedPayload` bounds as the recovery escrow. The
+  purpose `data-key-wrapper.v1` is what stops one being replayed as the other.
+- **Not offered as removable.** There is no "remove passphrase": its failure
+  mode is silent — the user believes the key is protected when it is not — and
+  nothing in the product needs it.
+
+The passphrase is never persisted, logged, transmitted, or held anywhere beyond
+the call that uses it; the opened *key* is held for the session, because the KDF
+costs about twenty-five seconds on a phone and the repository asks for the key
+on every operation. `scripts/check-architecture.mjs` enforces the first half.
+
+`recover` and `adoptPairedKey` both refuse a `protected` device, so neither can
+drop the protection as a side effect, and `exportForPairing` goes through
+`load()`, so a locked device cannot hand out a key it has not itself opened.
 
 ## Trusted-device pairing
 
@@ -134,8 +177,8 @@ Three properties the API is shaped to keep:
 - Confirmation is local. Nothing about it is written to the relay, and there is
   no `verified` field to write it to.
 - Nothing here creates a key. `exportForPairing` refuses unless one is already
-  in custody; `adoptPairedKey` refuses when custody is `present` *or*
-  `unusable`. Every failure leaves both devices exactly as they were.
+  in custody; `adoptPairedKey` refuses when custody is `present`, `protected`
+  *or* `unusable`. Every failure leaves both devices exactly as they were.
 
 `InMemoryPairingRelay` restates the Security Rules' append-only constraints, so
 a driver that passes against it is a driver that works against Firestore.
