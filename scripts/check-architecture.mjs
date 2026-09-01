@@ -587,6 +587,138 @@ for (const file of SECRET_BEARING) {
   }
 }
 
+// 6. The data-key passphrase goes nowhere.
+//
+// Gate 7 introduced the one secret in this system that a person carries in
+// their head and cannot be issued a new copy of. The recovery code is shown
+// once and escrowed; the data key is escrowed and can be paired across; the
+// passphrase is neither, so anywhere it is written down or emitted is a place
+// it outlives the moment it was typed, with nothing to rotate afterwards.
+//
+// The identifiers below are the parameter names the passphrase actually
+// travels under. Renaming one to slip past this check would be a deliberate
+// act, which is the most a static check can ask for.
+const PASSPHRASE_NAMES =
+  /\b(?:passphrase|currentPassphrase|nextPassphrase|newPassphrase)\b/;
+
+/** Anything that makes a value outlive the call, or leave the device. */
+const PASSPHRASE_SINKS = [
+  { pattern: /\bconsole\s*\./, name: 'a log line' },
+  { pattern: /\bfetch\s*\(/, name: 'a network call' },
+  { pattern: /\.setItem\s*\(/, name: 'web storage' },
+  { pattern: /\bAsyncStorage\b/, name: 'AsyncStorage' },
+  { pattern: /\b(?:window\.|globalThis\.)?(?:local|session)Storage\s*[.[]/, name: 'web storage' },
+  { pattern: /\bstorage\s*\.\s*set\s*\(/, name: 'secure storage' },
+  { pattern: /\.\s*(?:save|put|setDoc|updateDoc|addDoc)\s*\(/, name: 'persistence' },
+  { pattern: /\bstoreWrapped\s*\(/, name: 'custody' },
+];
+
+for (const file of sources) {
+  const path = relative(ROOT, file);
+  if (path.includes('/tests/') || /\.test\.tsx?$/.test(path)) continue;
+  const code = stripComments(readFileSync(file, 'utf8'));
+  for (const line of code.split('\n')) {
+    if (!PASSPHRASE_NAMES.test(line)) continue;
+    for (const { pattern, name } of PASSPHRASE_SINKS) {
+      if (pattern.test(line)) {
+        failures.push(
+          `${path} passes a passphrase to ${name}: ${line.trim()}. ` +
+            'The data-key passphrase is never persisted, logged or transmitted — ' +
+            'it exists for the duration of the call that uses it and nowhere else.',
+        );
+      }
+    }
+  }
+}
+
+// 6b. The lifecycle's session holder holds a key, never the passphrase.
+//
+// `dataKeyLifecycle` keeps the opened data key for the session, because
+// re-deriving it costs about twenty-five seconds at the shipped KDF cost and
+// every repository operation asks for it. Keeping the *passphrase* there
+// instead — to re-derive on demand, say — would put the one unrotatable secret
+// in a long-lived variable, and a heap dump would have it.
+const LIFECYCLE = join(ROOT, 'packages/security/src/dataKeyLifecycle.ts');
+if (!existsSync(LIFECYCLE)) {
+  failures.push('packages/security/src/dataKeyLifecycle.ts is missing — the passphrase guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(LIFECYCLE, 'utf8'));
+  for (const [, assigned] of code.matchAll(/\bopened\s*=(?!=)\s*([^;]+);/g)) {
+    if (!/^(?:dataKey|null)$/.test(assigned.trim())) {
+      failures.push(
+        `packages/security/src/dataKeyLifecycle.ts assigns "${assigned.trim()}" to the ` +
+          'session holder. It holds the opened data key or nothing — never the passphrase, ' +
+          'and never anything derived from it.',
+      );
+    }
+  }
+}
+
+// 6c. The wrapper stays domain-separated from the recovery escrow.
+//
+// Both wrap the same 32 bytes with a human secret through the same envelope.
+// The purpose string bound into the AAD is the only thing stopping one being
+// replayed as the other — which would let a recovery code open a wrapper, or
+// a passphrase open an escrow.
+const WRAPPER = join(ROOT, 'packages/security/src/dataKeyWrapper.ts');
+if (!existsSync(WRAPPER)) {
+  failures.push('packages/security/src/dataKeyWrapper.ts is missing — the passphrase guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(WRAPPER, 'utf8'));
+  const purpose = code.match(/DATA_KEY_WRAPPER_PURPOSE\s*=\s*'([^']+)'/);
+  const escrowCode = stripComments(
+    readFileSync(join(ROOT, 'packages/security/src/recoveryEscrow.ts'), 'utf8'),
+  );
+  const escrowPurpose = escrowCode.match(/RECOVERY_ESCROW_PURPOSE\s*=\s*'([^']+)'/);
+  if (!purpose) {
+    failures.push(
+      'packages/security/src/dataKeyWrapper.ts names no purpose. Without one in the ' +
+        'additional data, a wrapper and a recovery escrow are the same envelope.',
+    );
+  } else if (escrowPurpose && purpose[1] === escrowPurpose[1]) {
+    failures.push(
+      `packages/security/src/dataKeyWrapper.ts shares the purpose "${purpose[1]}" with the ` +
+        'recovery escrow. A recovery code would then open a passphrase wrapper.',
+    );
+  }
+  // No verifier, digest or hint of the passphrase. Such a field would let
+  // anyone holding the stored envelope test a guess without paying for a key
+  // derivation, which is the only thing making a human secret costly offline.
+  if (/\b(?:digest|sha\d*|checksum|verifier|hint)\b/i.test(code)) {
+    failures.push(
+      'packages/security/src/dataKeyWrapper.ts names a digest, checksum, verifier or hint. ' +
+        'A wrapper carries ciphertext and non-secret KDF metadata only — anything testable ' +
+        'offline without the AEAD makes guessing cheap.',
+    );
+  }
+}
+
+// 6d. Custody's plain store never acquires a passphrase.
+//
+// Its three callers — first-time setup, recovery, pairing adoption — are the
+// moments at which a key *arrives* on a device, and none of them has a
+// passphrase. Requiring one there would put a forgettable secret in front of
+// recovery, which is precisely what the passphrase must never become: forget
+// it and you lose a device, not your records.
+const CUSTODY = join(ROOT, 'packages/security/src/keyCustody.ts');
+if (!existsSync(CUSTODY)) {
+  failures.push('packages/security/src/keyCustody.ts is missing — the passphrase guard cannot run.');
+} else {
+  const code = stripComments(readFileSync(CUSTODY, 'utf8'));
+  if (PASSPHRASE_NAMES.test(code)) {
+    failures.push(
+      'packages/security/src/keyCustody.ts names a passphrase. Custody stores a wrapper ' +
+        'somebody else produced; it neither derives nor holds the secret that opens one.',
+    );
+  }
+  if (!/store\s*\(\s*key\s*:\s*Uint8Array\s*\)/.test(code)) {
+    failures.push(
+      'packages/security/src/keyCustody.ts changed the signature of store(). Setup, recovery ' +
+        'and pairing all call it and none of them holds a passphrase.',
+    );
+  }
+}
+
 // Every shared package has a public API and a README.
 for (const pkg of readdirSync(join(ROOT, 'packages'))) {
   for (const required of ['src/index.ts', 'README.md', 'package.json']) {
