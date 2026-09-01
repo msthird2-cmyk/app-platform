@@ -32,6 +32,7 @@ export {
   type PairDevice,
   type PairNewDeviceButtonProps,
 } from './PairDeviceContext';
+export { BackupControls, type BackupControlsProps } from './BackupControls';
 export {
   EncryptedRepositoryProvider,
   type EncryptedRepositoryProviderProps,
