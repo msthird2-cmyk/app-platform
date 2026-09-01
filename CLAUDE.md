@@ -33,7 +33,7 @@ Architectural rationale: `docs/ARCHITECTURE.md`. This file is the operative rule
 25. Never add a plaintext export path beside an encrypted export without an explicit, documented security boundary. Prefer encrypted exports by default.
 26. Never restore untrusted collection names or arbitrary document shapes. Restore must use application allowlists and per-collection validation.
 27. Never use client-controlled timestamps/revisions as authoritative synchronization metadata. Use Firebase server timestamps and Rules where possible.
-28. Never claim account deletion is complete unless the implementation has an explicit strategy for all owned data, including subcollections and backups.
+28. Never claim account deletion is complete unless the implementation has an explicit strategy for all owned data, including subcollections. Deletion covers what the server holds; it cannot reach a backup file the user exported, and must not imply otherwise.
 
 ## Stack
 
@@ -178,19 +178,16 @@ Rules must ensure, as applicable:
 - revisions cannot be skipped or maliciously inflated
 - a non-null tombstone cannot be resurrected by an ordinary stale write
 - device-verification documents and recovery verification material are not client-readable/writable
-- backup metadata contains no financial records
+- the backup path grants nothing, to anyone, including its owner
 
 Every collection requires positive and negative tests, especially user A versus user B for read/write/update/delete.
 
 ### Required Storage model
 
-Preferred structure:
-
-```text
-users/{uid}/backups/{opaqueId}.json
-```
-
-Storage Rules must independently enforce:
+**There is no Cloud Storage.** Nothing this platform stores lives in a bucket:
+records and the recovery escrow are Firestore documents, and a backup is a file
+the user exported and keeps. If a future capability needs object storage, it
+brings its own rules with it — Storage Rules must independently enforce:
 
 - authenticated ownership
 - read/write/delete only within the caller's own prefix
@@ -358,10 +355,11 @@ already-expired offer.
 
 The suite is **skipped unless a project is configured**, so an unconfigured
 checkout and CI both stay green, and no credential is committed. Two things
-remain unproven: the Cloud Storage backup path, which was not exercised, and
-the key-custody storage tier — Gate 2 refuses a `memory` store and a Node
-process cannot honestly claim better, so that link is covered on real hardware
-by the Hermes self-test rather than here.
+One thing remains unproven: the key-custody storage tier. Gate 2 refuses a
+`memory` store and a Node process cannot honestly claim better, so that link is
+covered on real hardware by the Hermes self-test rather than there. Gate 6 also
+listed Cloud Storage as unexercised; that gap did not get filled, it was
+removed — backups no longer touch a server at all.
 
 **App Check is disabled for this build, with a stated reason.**
 `createFirebaseApp` requires the decision either way, so it is recorded rather
@@ -496,11 +494,27 @@ Sign-out must tear down the session: clear sensitive local storage owned by the 
 
 ## Backup and restore
 
-Backups are encrypted before upload. Backup identifiers must be CSPRNG-generated or otherwise collision-resistant and must pass a strict allowlist before being interpolated into paths.
+**A backup is an encrypted file the user controls, and the server never receives
+one.** `runBackup` encrypts the export and hands it to a `BackupTransport` — a
+share sheet on a device, a download in a browser — and the application then
+forgets it. There is no `list`, no `download(id)` and no `remove`, because there
+is nothing to list: an interface with those methods is one a server ends up
+implementing.
 
-Never derive backup identity from a caller-controlled timestamp alone. Never silently overwrite an existing backup ID.
+What follows from that, and must be said in the product rather than buried here:
+the user has to save the file somewhere they control, a backup they did not save
+is a backup they do not have, and **nobody can recover a forgotten backup
+passphrase** — not support, not the operator, not a reset link. The passphrase is
+also now the only protection on the file, since it leaves the application
+entirely, so the minimum-strength policy is enforced at every encryption entry
+point and not only in the UI. A one-character passphrase is never acceptable for
+a complete financial backup.
 
-Passphrases require a documented minimum-strength policy, enforced at every encryption entry point, not only in UI. A one-character passphrase is never acceptable for a complete financial backup.
+An imported file is untrusted input, whatever picker it came from. The maximum
+supported size is `MAX_BACKUP_BYTES` and is enforced **before the file is read or
+parsed** — that bound used to come from `storage.rules` and has no other enforcer
+now. Backup filenames carry a CSPRNG suffix so two exports in the same
+millisecond cannot collide in whatever folder the user keeps them in.
 
 Restore must:
 
@@ -538,18 +552,17 @@ Deletion order:
 2. recent re-authentication
 3. create/advance deletion journal if needed
 4. delete user-owned data
-5. delete all declared backups/storage objects
-6. delete secondary records
-7. delete auth account
-8. clear local session/cache/encrypted material
-9. signed-out state
+5. delete secondary records
+6. delete auth account
+7. clear local session/cache/encrypted material
+8. signed-out state
 ```
 
 Firestore does not cascade subcollections. Maintain one authoritative inventory of user-owned collections and do not keep divergent hardcoded lists in multiple services.
 
 On Spark, reliable recursive deletion/resumption across all possible subcollections cannot be guaranteed after the user disappears. Document this limitation honestly. If guaranteed server-side erasure is a product requirement, use a trusted backend/appropriate Firebase server capability rather than pretending client-side deletion is atomic.
 
-Backup deletion must handle nested Storage prefixes and must not leave summaries pointing at missing objects without reconciliation.
+There is no backup deletion step, and adding one would be a lie: an exported backup is a file on the user's own storage, and no client-side deletion reaches it. Say so plainly in the deletion flow rather than implying the copy is gone.
 
 ## Logging and errors
 
@@ -588,7 +601,7 @@ Security-rule tests must include:
 
 - unauthenticated access denied
 - user B cannot read/write/update/delete user A data for every private collection
-- user B cannot access user A backups
+- the backup path is denied to everyone, owner included
 - unknown collection/path rejected
 - ownership/security fields cannot be changed
 - invalid ID/doc path rejected
@@ -603,13 +616,14 @@ Crypto/security tests must include:
 - KDF iteration bounds enforced
 - AAD/context tampering rejected
 - weak backup passphrase rejected
+- oversized backup import rejected before parsing
 - wrong-key/tampered ciphertext rejected
 - app-lock escalation survives restart
 - sign-out clears session-local state
 
 Deletion tests must prove re-authentication occurs before destructive calls, every declared collection is handled, interrupted deletion is resumable where promised, and local state is cleared.
 
-Restore tests must prove unknown collections, unsafe object keys, invalid record shapes and stale-backup overwrites are rejected or explicitly handled.
+Restore tests must prove unknown collections, unsafe object keys, invalid record shapes and stale-backup overwrites are rejected or explicitly handled, and that an oversized import is refused before it is read.
 
 ## Firebase Emulator and repository files
 

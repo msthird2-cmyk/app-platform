@@ -62,8 +62,7 @@ disposable project — it writes and deletes documents under the signed-in user.
 The account needs a verified address, because the rules require one on every
 record write and nothing here can grant it.
 
-Two gaps remain. The Cloud Storage backup path has not been exercised against a
-real bucket. And key custody cannot be exercised off-device at all: the
+One gap remains. Key custody cannot be exercised off-device at all: the
 architecture refuses a `memory` protection tier, so the data key in that suite
 is held by the harness rather than a keystore, and custody itself is proven on
 Android API 29 and 34 by the Hermes self-test.
@@ -74,6 +73,11 @@ Android API 29 and 34 by the Hermes self-test.
   key Firebase never sees. `useRepository()` cannot hand a screen anything but
   the encryption boundary.
 - **Recovery** is the Gate 3 escrow at `users/{uid}/recoveryEscrow/current`.
+  It restores the data key after every trusted device is lost. It is not a
+  backup, and a backup is not recovery.
+- **Backup** is an encrypted file you export and keep. Nothing is uploaded, no
+  copy is retained here, and no one — including whoever runs this — can open it
+  or reset its passphrase. Save it somewhere you control, or you do not have one.
 - **Pairing** is available, because a Firebase build supplies the relay.
 - **App Check is disabled**, with a stated reason: on React Native attestation
   comes from the native Firebase SDK, and the web SDK's reCAPTCHA providers do

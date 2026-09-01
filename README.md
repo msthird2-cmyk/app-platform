@@ -84,7 +84,7 @@ Interfaces live with their domain package; implementations live in
   collections={['assets', 'liabilities']}
   authService={firebaseAuthService}
   accountService={firebaseAccountService}
-  backupService={firebaseBackupService}
+  backupTransport={backupTransport}
   repository={firebaseRepository}
   cryptoService={cryptoService}
   secureStorage={secureStorage}
@@ -111,7 +111,7 @@ The architecture is checked, not just documented.
 | Nothing in `packages/` imports from `apps/` | `scripts/check-architecture.mjs` |
 | Every shared package has a public API and a README | `scripts/check-architecture.mjs` |
 | Ownership, document shape and immutability in Firestore | `firestore.rules`, tested by `pnpm test:rules` |
-| Backup ownership, filename safety and size in Storage | `storage.rules`, tested by `pnpm test:rules` |
+| Backup stays a user-controlled file, and its core stays platform-free | `scripts/check-architecture.mjs` |
 
 If a change appears to require editing the boundary configuration, stop and
 explain the architectural conflict — do not widen the rule to make code compile.
@@ -134,8 +134,8 @@ free of it (`packages/theme/src/scheme.ts` is the pattern). Component tests need
 a `react-native` → `react-native-web` alias.
 
 Every service interface has a working in-memory implementation —
-`InMemoryAuthService`, `InMemoryAccountService`, `InMemoryBackupService`,
-`InMemoryRepository`, `InMemorySecureStorage` — so a flow can be exercised end
+`InMemoryAuthService`, `InMemoryAccountService`, `InMemoryRepository`,
+`InMemorySecureStorage` — so a flow can be exercised end
 to end without a backend. `packages/account/tests` uses them to assert that a
 deletion leaves nothing behind, and that a failure part-way through leaves the
 account recoverable rather than orphaned.

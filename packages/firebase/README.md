@@ -41,7 +41,6 @@ const repository = new FirebaseRepository(app, () => currentUserId, COLLECTIONS)
 | `FirebaseAuthService` | `AuthService` |
 | `FirebaseRepository` | `Repository` |
 | `FirebaseAccountService` | `AccountService` |
-| `FirebaseBackupService` | `BackupService` |
 | `AdaptedSecureStorage` | `SecureStorage`, over a platform key-value store |
 | `ServiceError`, `isServiceError` | Structural coded error raised by these adapters |
 
@@ -57,7 +56,7 @@ The application passes the whole `FirebaseConfig`. Nothing about a project, buck
 
 Because this package may not value-import a domain package, it cannot construct that domain's error class. It raises `ServiceError` instead, which carries the same `domain` and `code` and is recognised by `errorCode()` in `@platform/utils`. Codes are checked against the domain's own union at compile time with `satisfies`.
 
-Documents live under `users/{uid}/{collection}` so one user's data can be secured, exported and deleted as a single subtree. That layout is enforced by `firestore.rules` and `storage.rules` at the repository root, tested by `pnpm test:rules` against the Firebase emulators.
+Documents live under `users/{uid}/{collection}` so one user's data can be secured, exported and deleted as a single subtree. That layout is enforced by `firestore.rules` at the repository root, tested by `pnpm test:rules` against the Firestore emulator. There is no Cloud Storage and no `storage.rules`: backups are files the user keeps, so nothing this package writes lives in a bucket.
 
 `updatedAt` and `deletedAt` are written with `serverTimestamp()` and required by the rules to equal `request.time`, so a device cannot claim a timestamp it did not earn. `FirebaseRepository.put` reads the record back and returns it for that reason — the caller must store what the server stored.
 

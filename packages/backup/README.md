@@ -38,11 +38,13 @@ if (isBackupDue(settings, Date.now())) {
 
 | Export | What it does |
 | --- | --- |
-| `BackupService`, `BackupSummary` | The backup storage contract |
-| `runBackup`, `runRestore` | Collect → encrypt → upload, and its inverse |
-| `isBackupDue`, `nextBackupAt`, `describeStaleness` | Automatic backup scheduling |
+| `BackupTransport`, `BackupFile`, `BackupSummary` | Where a backup goes and comes from |
+| `MAX_BACKUP_BYTES` | The import ceiling, enforced before a file is read |
+| `runBackup`, `runRestore` | Collect → encrypt → hand to the user, and its inverse |
+| `isBackupDue`, `nextBackupAt`, `describeStaleness` | When to remind somebody an export is due |
 | `BackupSettings`, `BackupProgress`, `DEFAULT_BACKUP_SETTINGS` | Settings and progress model |
-| `InMemoryBackupService` | A working BackupService with no backend, for previews and tests |
+| `createFileBackupTransport` | Share sheet on a device, from injected Expo modules |
+| `createWebBackupTransport`, `createDomBackupHost` | Download and file input, in a browser |
 | `BackupStatus`, `BackupScreen` | Screens |
 | `BackupError`, `BackupErrorCode` | Typed failures |
 
@@ -56,9 +58,13 @@ Applications supply the collection list, the passphrase and the backup interval.
 
 ## Limitations
 
-Only the encrypted payload leaves the device; the passphrase is never uploaded, so a lost passphrase means an unreadable backup. Restore overwrites local records and requires explicit confirmation.
+**Nothing is uploaded.** A backup is an encrypted file handed to the person, and this application keeps no copy — so a file they do not save is a backup they do not have, and a forgotten passphrase makes it unreadable by anybody, permanently. Restore overwrites local records and requires explicit confirmation.
 
-`runBackup` rejects a weak passphrase before reading any data — PBKDF2 raises the cost per guess but cannot rescue a guessable secret. Backup identifiers are random rather than derived from a timestamp, so two backups in the same millisecond cannot collide, and the storage rules refuse to overwrite an existing object.
+This is not the device-loss recovery path. Recovery-code escrow is a separate mechanism in `@platform/security`, it restores a data key rather than records, and it is unaffected by any of this.
+
+`runBackup` rejects a weak passphrase before reading any data — PBKDF2 raises the cost per guess but cannot rescue a guessable secret, and since the file leaves the application the passphrase is the only thing protecting it. Filenames carry a CSPRNG suffix so two exports in the same millisecond cannot collide.
+
+An import is untrusted whatever picker produced it: anything over `MAX_BACKUP_BYTES` is refused **before the file is read or parsed**, which is where `storage.rules` used to stop it.
 
 `runRestore` requires the owner, the application name and the collection allowlist. A bundle belonging to another account or another application fails the integrity check rather than decrypting, and a bundle naming a collection the application does not own is refused before any write.
 

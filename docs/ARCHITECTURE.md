@@ -130,17 +130,20 @@ Rules must independently verify:
   holding their own wrapped key learns nothing they could not already compute.
   The shape is a fixed allowlist, so no field that could verify a guessed code
   can be added to it.
-- backup metadata cannot contain financial record payloads
+- the backup path grants nothing, to anyone, including its owner
 
 ### Storage ownership model
 
-Preferred structure:
+There is no Cloud Storage, and no Storage Rules. Records and the recovery escrow
+are Firestore documents; a backup is a file the user exported and keeps. The
+bucket that used to hold backups is gone along with the metadata beside it —
+size, record count, and how often somebody backed up — none of which needed to
+be on a server for the product to work.
 
-```text
-users/{uid}/backups/{opaqueId}.json
-```
-
-Storage Rules independently enforce authentication, ownership, operation type, size/content-type limits and a strict filename allowlist. Encryption does not replace authorization: encrypted data can still be deleted or corrupted if Storage Rules are weak.
+If a future capability needs object storage it brings its own rules, and they
+must independently enforce authentication, ownership, operation type,
+size/content-type limits and a strict filename allowlist. Encryption does not
+replace authorization: encrypted data can still be deleted or corrupted.
 
 ## App Check
 
@@ -318,10 +321,12 @@ or data key ever reaching the relay. The rules refused, in production and not
 only in the emulator, an unauthenticated read, a cross-user read, a plaintext
 record, a reserved field, a write to a consumed session and an expired offer.
 
-What that leaves is narrower than what it settles. The Cloud Storage backup path
-was not exercised, and key custody cannot be: this architecture refuses a
-`memory` protection tier, so no server-side harness may hold a data key, and
-that link stays where it belongs — on a device, under the Hermes self-test.
+What that leaves is narrower than what it settles. Key custody cannot be
+exercised there: this architecture refuses a `memory` protection tier, so no
+server-side harness may hold a data key, and that link stays where it belongs —
+on a device, under the Hermes self-test. Gate 6 also recorded Cloud Storage as
+unexercised; that entry is now moot rather than outstanding, because backups
+stopped going to a server.
 
 Recovery is the exception rather than the default because it is the weakest link
 — a single secret that reconstructs everything. Making it routine would mean
@@ -413,11 +418,44 @@ Sign-out must clear session-local sensitive state, dispose cached per-user repos
 
 ## Backup and restore security
 
-Backups are encrypted on the device before upload. Firebase Storage must receive ciphertext for protected financial data.
+A backup is an encrypted file the user controls. The server never receives one.
 
-Backup IDs are opaque, random/collision-resistant and validated before path interpolation. Do not derive IDs from caller-controlled timestamps alone and never silently overwrite an existing ID.
+**Why it moved off the server.** Backups had been ciphertext in Cloud Storage
+with a summary document beside them, and that was defensible — the rules were
+owner-only and the payload was sealed. What it still meant was a copy of every
+user's complete financial history sitting in an operator's bucket, indexed by a
+summary that stated in the clear how large it was, how many records it held and
+how often they backed up. None of that had to exist for the product to work.
+Deleting it removes a whole authorization surface, removes the metadata, and
+makes account deletion honest: there is no server copy left to strand.
 
-Backup passphrases require a minimum-strength policy at every encryption entry point. A one-character passphrase is invalid for financial backups.
+**What it costs, stated plainly.** A file on the device does not survive the
+device. The export must therefore leave the application — a share sheet to a
+cloud drive, an email, a download — and the product must say so, because a
+backup the user did not save is a backup they do not have. This is *not* the
+device-loss recovery path; that is the recovery-code escrow, which is a separate
+mechanism and stays server-side. Do not describe the escrow as a backup or the
+backup as recovery: one restores a data key, the other restores records, and
+conflating them tells a user they are protected when they are not.
+
+**The passphrase carries more weight than it did.** Two layers used to stand
+between an attacker and the data: the passphrase, and Firebase auth plus the
+Storage rules. One remains. Against somebody holding the file, PBKDF2 at the
+shipped cost is the entire margin, so the minimum-strength policy is enforced at
+every encryption entry point and no reset path exists — nothing in the system can
+recover a forgotten backup passphrase, and nothing should pretend to.
+
+`packages/backup` stays platform-free. A `BackupTransport` is injected the way
+`createPlatformSecureStorage` takes `expo-secure-store`, so the shared package
+names no Expo module and no Firebase one; an architecture guard fails the build
+if either appears.
+
+**An import is untrusted input**, whatever picker produced it. The size ceiling
+is `MAX_BACKUP_BYTES` — the same 25 MB that `storage.rules` used to enforce on
+upload — and it is checked *before the file is read or parsed*, because a bound
+applied after the allocation is documentation rather than a limit. Backup
+filenames carry a CSPRNG suffix so two exports in one millisecond cannot collide
+in the folder the user keeps them in.
 
 Restore is treated as hostile input even after decryption. It must:
 
