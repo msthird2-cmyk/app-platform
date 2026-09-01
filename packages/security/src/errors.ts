@@ -41,6 +41,16 @@ export const SecurityErrorCode = {
   RECORD_NOT_ENCRYPTED: 'RECORD_NOT_ENCRYPTED',
   /** No data encryption key is available, so nothing can be read or written. */
   DATA_KEY_UNAVAILABLE: 'DATA_KEY_UNAVAILABLE',
+  /** A wrapper document this system did not produce, or one that is corrupt. */
+  DATA_KEY_WRAPPER_INVALID: 'DATA_KEY_WRAPPER_INVALID',
+  /**
+   * The key is wrapped and no passphrase has been supplied this session.
+   *
+   * Distinct from `DATA_KEY_UNAVAILABLE`, which means there is no key: this
+   * one means there is a key and it is shut. The caller must ask for the
+   * passphrase rather than offer setup or recovery.
+   */
+  DATA_KEY_LOCKED: 'DATA_KEY_LOCKED',
   /** An ephemeral key or a peer public key is not a valid P-256 point. */
   PAIRING_KEY_INVALID: 'PAIRING_KEY_INVALID',
   /** The session document is not one this system wrote. */
