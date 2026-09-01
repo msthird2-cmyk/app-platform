@@ -343,15 +343,25 @@ build time. Nothing is hard-coded and nothing is committed: an unconfigured
 checkout is a preview build. Investment and Expense are deliberately still
 in-memory; converting them is the same shape of change and is not done.
 
-**No live Firebase round trip has been observed.** No project configuration
-exists in this repository or in CI, so what is established is that the
-production composition is constructed and that every layer above it — the
-encryption boundary, the record envelope, the key lifecycle — is exercised
-against a store standing exactly where `FirebaseRepository` stands. Reading and
-writing a real Firestore document, and the `email_verified` requirement the
-record rules impose on every create and update, remain unverified until someone
-supplies a project. Do not describe Net Worth as proven against Firebase on the
-strength of the tests alone.
+**Net Worth has been validated against a real Firebase project (Gate 6).**
+`apps/networth/tests/firebase.integration.test.ts` signs in with a verified
+account and drives the shipped composition — `createProductionServices`,
+`FirebaseRepository`, `FirebaseRecoveryEscrowStore`, `FirebasePairingRelay` —
+against live Firestore. It writes a record through the same
+`repositoryForConsumer` that `useRepository()` returns, reads the stored
+document back over REST, and asserts it carries the envelope and none of the
+domain fields; it escrows and recovers the key; it runs the whole pairing
+protocol between two devices on one account. The real rules were confirmed to
+refuse an unauthenticated read, another user's data, a plaintext record, a
+reserved field, the closed paths, a write to a consumed pairing session and an
+already-expired offer.
+
+The suite is **skipped unless a project is configured**, so an unconfigured
+checkout and CI both stay green, and no credential is committed. Two things
+remain unproven: the Cloud Storage backup path, which was not exercised, and
+the key-custody storage tier — Gate 2 refuses a `memory` store and a Node
+process cannot honestly claim better, so that link is covered on real hardware
+by the Hermes self-test rather than here.
 
 **App Check is disabled for this build, with a stated reason.**
 `createFirebaseApp` requires the decision either way, so it is recorded rather

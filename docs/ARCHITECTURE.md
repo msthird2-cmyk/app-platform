@@ -309,12 +309,19 @@ same reasoning as the plaintext fallback this architecture forbids: an
 application that looks like it is working while the data is not where the user
 thinks it is, is worse than one that stops.
 
-It also has not been observed. No project configuration exists in this
-repository or in CI, so what the tests establish is that the production
-composition constructs and that every layer above it runs against a store
-standing exactly where `FirebaseRepository` stands. The network path, the
-Security Rules and the `email_verified` requirement they impose on every record
-write are exercised for the first time by whoever supplies a project.
+It has now been observed. Gate 6 ran the shipped composition against a real
+Firebase project: a record written through the encryption boundary reached
+Firestore as an envelope with no domain field in it, the escrowed key was
+recovered from a real document and opened that record, and the pairing protocol
+completed between two devices on one account with no private key, transport key
+or data key ever reaching the relay. The rules refused, in production and not
+only in the emulator, an unauthenticated read, a cross-user read, a plaintext
+record, a reserved field, a write to a consumed session and an expired offer.
+
+What that leaves is narrower than what it settles. The Cloud Storage backup path
+was not exercised, and key custody cannot be: this architecture refuses a
+`memory` protection tier, so no server-side harness may hold a data key, and
+that link stays where it belongs — on a device, under the Hermes self-test.
 
 Recovery is the exception rather than the default because it is the weakest link
 — a single secret that reconstructs everything. Making it routine would mean
