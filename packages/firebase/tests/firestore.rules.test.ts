@@ -238,48 +238,32 @@ describe('profile fields', () => {
   });
 });
 
-describe('backup metadata', () => {
+describe('the backup path, which no longer exists', () => {
   const summary = { id: 'abc123', createdAt: 1, sizeBytes: 10, recordCount: 2, appName: 'Net Worth' };
 
-  it('accepts a well-formed summary from the owner', async () => {
+  // A backup is an encrypted file the person exported and keeps themselves.
+  // The server receives none, so this path grants nothing at all — not to a
+  // stranger, and not to its owner either. What went with it is the metadata
+  // the old summary carried in the clear: how large the backup was, how many
+  // records it held, and how often one was taken.
+
+  it('refuses the owner writing a backup summary', async () => {
     const db = verified(env, ALICE).firestore();
-    await assertSucceeds(setDoc(doc(db, `users/${ALICE}/backups/abc123`), summary));
+    await assertFails(setDoc(doc(db, `users/${ALICE}/backups/abc123`), summary));
   });
 
-  it('rejects a summary carrying record content', async () => {
-    const db = verified(env, ALICE).firestore();
-    await assertFails(
-      setDoc(doc(db, `users/${ALICE}/backups/abc123`), { ...summary, records: [{ value: 1 }] }),
-    );
-  });
-
-  it('rejects an id that is not a safe filename', async () => {
-    const db = verified(env, ALICE).firestore();
-    await assertFails(
-      setDoc(doc(db, `users/${ALICE}/backups/has spaces`), { ...summary, id: 'has spaces' }),
-    );
-  });
-
-  it('refuses to update a backup summary the owner owns', async () => {
+  it('refuses the owner reading or deleting one, even planted', async () => {
     await env.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), `users/${ALICE}/backups/abc123`), summary);
     });
     const db = verified(env, ALICE).firestore();
-    // A summary is immutable once written: its counts describe an object in
-    // Storage that itself cannot be replaced.
-    await assertFails(
-      setDoc(doc(db, `users/${ALICE}/backups/abc123`), { ...summary, recordCount: 99 }),
-    );
+    await assertFails(getDoc(doc(db, `users/${ALICE}/backups/abc123`)));
+    await assertFails(deleteDoc(doc(db, `users/${ALICE}/backups/abc123`)));
   });
 
-  it('refuses to overwrite an existing backup summary', async () => {
-    await env.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), `users/${ALICE}/backups/abc123`), summary);
-    });
+  it('refuses a listing of the collection', async () => {
     const db = verified(env, ALICE).firestore();
-    await assertFails(
-      setDoc(doc(db, `users/${ALICE}/backups/abc123`), { ...summary, recordCount: 999 }),
-    );
+    await assertFails(getDocs(collection(db, `users/${ALICE}/backups`)));
   });
 });
 

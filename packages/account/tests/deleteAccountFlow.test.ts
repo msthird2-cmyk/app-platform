@@ -16,7 +16,6 @@ function trackingService(overrides: Partial<AccountService> = {}) {
     beginDeletion: async () => void calls.push('beginDeletion'),
     hasPendingDeletion: async () => calls.includes('beginDeletion'),
     deleteUserData: async () => void calls.push('deleteUserData'),
-    deleteBackups: async () => void calls.push('deleteBackups'),
     deleteSecondaryRecords: async () => void calls.push('deleteSecondaryRecords'),
     deleteAccount: async () => void calls.push('deleteAccount'),
     exportUserData: async () => ({}),
@@ -37,7 +36,6 @@ describe('deleteAccountFlow', () => {
     expect(calls).toEqual([
       'beginDeletion',
       'deleteUserData',
-      'deleteBackups',
       'deleteSecondaryRecords',
       'deleteAccount',
     ]);
@@ -47,7 +45,6 @@ describe('deleteAccountFlow', () => {
       'reauthenticate',
       'journal',
       'delete-user-data',
-      'delete-backups',
       'delete-secondary-records',
       'delete-account',
       'clear-local-state',
@@ -157,10 +154,10 @@ describe('deleteAccountFlow', () => {
 });
 
 describe('deleteUserDataFlow', () => {
-  it('removes data and backups but keeps the account', async () => {
+  it('removes data but keeps the account', async () => {
     const { service, calls } = trackingService();
     const steps = await deleteUserDataFlow(service, {}, { confirmed: true });
-    expect(calls).toEqual(['deleteUserData', 'deleteBackups']);
+    expect(calls).toEqual(['deleteUserData']);
     expect(steps).not.toContain('delete-account');
   });
 

@@ -13,7 +13,6 @@ export {
 export { FirebaseAuthService } from './services/FirebaseAuthService';
 export { FirebaseRepository } from './services/FirebaseRepository';
 export { FirebaseAccountService } from './services/FirebaseAccountService';
-export { FirebaseBackupService } from './services/FirebaseBackupService';
 export { FirebaseRecoveryEscrowStore } from './services/FirebaseRecoveryEscrowStore';
 export { FirebasePairingRelay } from './services/FirebasePairingRelay';
 export {

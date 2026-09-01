@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { registerRootComponent } from 'expo';
 import * as SecureStore from 'expo-secure-store';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { getRandomBytes } from 'expo-crypto';
+import { createFileBackupTransport } from '@platform/backup';
 import {
   createIndexedDbDatabase,
   createPlatformSecureStorage,
@@ -104,6 +108,19 @@ function Unavailable({ message }: { message: string }) {
   );
 }
 
+/**
+ * Export goes to a private temporary file and straight into the share sheet;
+ * import comes back through the document picker. The Expo modules are injected
+ * rather than imported inside `@platform/backup`, exactly as `expo-secure-store`
+ * is for custody — the shared package stays platform-free, and an architecture
+ * guard fails the build if that changes.
+ */
+const backupTransport = createFileBackupTransport({
+  fileSystem: FileSystem,
+  sharing: Sharing,
+  documentPicker: DocumentPicker,
+});
+
 function Root() {
   const [custody, setCustody] = useState<Custody | null>(null);
   const [services, setServices] = useState<NetWorthServices | null>(null);
@@ -123,11 +140,14 @@ function Root() {
     }
 
     try {
-      setServices(
+      const composed =
         selection.kind === 'firebase'
           ? createProductionServices(selection.firebase)
-          : createPreviewServices(),
-      );
+          : createPreviewServices();
+      // The same transport in both compositions, because a backup never
+      // depended on the backend: it is an encrypted file this device hands to
+      // the person, and where the records came from does not change that.
+      setServices({ ...composed, backupTransport });
     } catch {
       setFailure('This app could not connect to its backend, so it cannot start.');
       return () => {

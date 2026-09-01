@@ -4,7 +4,7 @@ export {
   useServices,
   useAppConfig,
   useAccountService,
-  useBackupService,
+  useBackupTransport,
   useRepository,
   useCryptoService,
   type PlatformServices,
@@ -32,6 +32,7 @@ export {
   type PairDevice,
   type PairNewDeviceButtonProps,
 } from './PairDeviceContext';
+export { BackupControls, type BackupControlsProps } from './BackupControls';
 export {
   EncryptedRepositoryProvider,
   type EncryptedRepositoryProviderProps,

@@ -1,4 +1,4 @@
-import { AppCore, PairNewDeviceButton } from '@platform/core';
+import { AppCore, BackupControls, PairNewDeviceButton } from '@platform/core';
 import { LoginScreen } from '@platform/auth';
 import { getRandomBytes } from 'expo-crypto';
 import {
@@ -76,7 +76,7 @@ export default function App({
       collections={COLLECTIONS}
       authService={services.authService}
       accountService={services.accountService}
-      backupService={services.backupService}
+      backupTransport={services.backupTransport}
       repository={services.repository}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}
@@ -108,6 +108,8 @@ export default function App({
             services.backend === 'preview' ? DEMO_PREVIOUS_NET_WORTH : null
           }
         />
+        {/* Renders nothing unless a backup transport was injected. */}
+        <BackupControls collections={COLLECTIONS} messageForCode={messageForCode} />
       </>
     </AppCore>
   );

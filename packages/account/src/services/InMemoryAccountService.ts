@@ -5,7 +5,7 @@ export interface InMemoryAccountOptions {
   profile: UserProfile;
   /** Records the service is holding, so a deletion can be observed. */
   data?: Record<string, unknown[]>;
-  failOn?: 'deleteUserData' | 'deleteBackups' | 'deleteSecondaryRecords' | 'deleteAccount';
+  failOn?: 'deleteUserData' | 'deleteSecondaryRecords' | 'deleteAccount';
 }
 
 /**
@@ -16,7 +16,6 @@ export class InMemoryAccountService implements AccountService {
   readonly calls: string[] = [];
   private profile: UserProfile;
   private data: Record<string, unknown[]>;
-  private backups: unknown[] = [{ id: 'seed-backup' }];
   private secondary: unknown[] = [{ id: 'seed-device' }];
   private accountExists = true;
   private deletionStarted = false;
@@ -55,10 +54,6 @@ export class InMemoryAccountService implements AccountService {
     this.data = {};
   }
 
-  async deleteBackups(): Promise<void> {
-    this.record('deleteBackups');
-    this.backups = [];
-  }
 
   async deleteSecondaryRecords(): Promise<void> {
     this.record('deleteSecondaryRecords');
@@ -75,10 +70,9 @@ export class InMemoryAccountService implements AccountService {
   }
 
   /** What is still stored — used to assert that nothing was orphaned. */
-  get remaining(): { collections: number; backups: number; secondary: number; account: boolean } {
+  get remaining(): { collections: number; secondary: number; account: boolean } {
     return {
       collections: Object.keys(this.data).length,
-      backups: this.backups.length,
       secondary: this.secondary.length,
       account: this.accountExists,
     };

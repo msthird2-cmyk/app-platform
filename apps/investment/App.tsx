@@ -12,7 +12,7 @@ import {
 import type { PairingRelay, RecoveryEscrowStore, SecureStorage } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
-import type { BackupService } from '@platform/backup';
+import type { BackupTransport } from '@platform/backup';
 import { PortfolioScreen } from './src/screens/PortfolioScreen';
 import { messageForCode } from './src/messages';
 import { DEMO_HOLDINGS } from './src/demo';
@@ -39,13 +39,13 @@ export interface InvestmentAppProps {
    */
   pairingRelay?: PairingRelay;
   accountService: AccountService;
-  backupService: BackupService;
+  backupTransport?: BackupTransport | undefined;
 }
 
 export default function App({
   authService,
   accountService,
-  backupService,
+  backupTransport,
   secureStorage,
   minimumProtection = 'os-keystore',
   escrowStore = new InMemoryRecoveryEscrowStore(),
@@ -77,7 +77,7 @@ export default function App({
       collections={COLLECTIONS}
       authService={authService}
       accountService={accountService}
-      backupService={backupService}
+      backupTransport={backupTransport}
       repository={new InMemoryRepository()}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}

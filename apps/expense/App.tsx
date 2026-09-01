@@ -12,7 +12,7 @@ import {
 import type { PairingRelay, RecoveryEscrowStore, SecureStorage } from '@platform/security';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
-import type { BackupService } from '@platform/backup';
+import type { BackupTransport } from '@platform/backup';
 import { ExpensesScreen } from './src/screens/ExpensesScreen';
 import { messageForCode } from './src/messages';
 import { DEMO_BUDGETS, DEMO_EXPENSES, DEMO_MONTH } from './src/demo';
@@ -39,14 +39,14 @@ export interface ExpenseAppProps {
    */
   pairingRelay?: PairingRelay;
   accountService: AccountService;
-  backupService: BackupService;
+  backupTransport?: BackupTransport | undefined;
   now?: Date;
 }
 
 export default function App({
   authService,
   accountService,
-  backupService,
+  backupTransport,
   secureStorage,
   now,
   minimumProtection = 'os-keystore',
@@ -79,7 +79,7 @@ export default function App({
       collections={COLLECTIONS}
       authService={authService}
       accountService={accountService}
-      backupService={backupService}
+      backupTransport={backupTransport}
       repository={new InMemoryRepository()}
       cryptoService={cryptoService}
       dataKeyLifecycleFor={dataKeyLifecycleFor}

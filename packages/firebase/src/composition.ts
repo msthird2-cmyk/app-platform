@@ -2,12 +2,10 @@ import type { FirebaseApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import type { AccountService } from '@platform/account';
 import type { AuthService } from '@platform/auth';
-import type { BackupService } from '@platform/backup';
 import type { Repository } from '@platform/data';
 import type { PairingRelay, RecoveryEscrowStore } from '@platform/security';
 import { FirebaseAccountService } from './services/FirebaseAccountService';
 import { FirebaseAuthService } from './services/FirebaseAuthService';
-import { FirebaseBackupService } from './services/FirebaseBackupService';
 import { FirebasePairingRelay } from './services/FirebasePairingRelay';
 import { FirebaseRecoveryEscrowStore } from './services/FirebaseRecoveryEscrowStore';
 import { FirebaseRepository } from './services/FirebaseRepository';
@@ -15,16 +13,17 @@ import { FirebaseRepository } from './services/FirebaseRepository';
 /**
  * The Firebase services, built together.
  *
- * **What this is, and what it deliberately is not.** It is not a production
- * entry point. Nothing in `apps/` calls it, and adding it does not make any
- * application talk to Firestore: each application's `index.tsx` still wires the
- * in-memory services, and switching one over is an application-level decision
- * with its own configuration, App Check posture and release.
+ * **What this is.** The smallest thing that keeps a backend coherent: five
+ * services that all need the same `FirebaseApp` and the same user id,
+ * constructed in one audited place rather than five times across three
+ * applications. Net Worth's `index.tsx` calls it when configured for Firebase;
+ * Investment and Expense remain in-memory, and switching one over is an
+ * application-level decision with its own configuration, App Check posture and
+ * release.
  *
- * What it is is the smallest thing that removes the reason there was no
- * production wiring: six services that all need the same `FirebaseApp` and the
- * same user id, constructed consistently in one audited place instead of six
- * times in three applications. A production entry point becomes
+ * Backup is deliberately absent. A backup is an encrypted file the person
+ * exported and keeps, so it has no backend service and this function has
+ * nothing to construct for it. A production entry point becomes
  *
  * ```ts
  * const backend = createFirebaseBackend(createFirebaseApp(config, { appCheck }), {
@@ -50,7 +49,6 @@ export interface FirebaseBackendOptions {
 export interface FirebaseBackend {
   authService: AuthService;
   accountService: AccountService;
-  backupService: BackupService;
   repository: Repository;
   escrowStore: RecoveryEscrowStore;
   /**
@@ -68,7 +66,6 @@ export function createFirebaseBackend(
   return {
     authService: new FirebaseAuthService(app),
     accountService: new FirebaseAccountService(app, options.collections),
-    backupService: new FirebaseBackupService(app),
     repository: new FirebaseRepository(
       app,
       // Read per call, off the token the rules will check — never off a value

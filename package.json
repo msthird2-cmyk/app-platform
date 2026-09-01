@@ -13,7 +13,7 @@
     "typecheck": "turbo typecheck",
     "verify": "turbo build test lint && pnpm test:rules",
     "check:architecture": "node scripts/check-architecture.mjs",
-    "test:rules": "firebase emulators:exec --only firestore,storage --project app-platform-rules-test 'vitest run --config vitest.rules.config.ts'"
+    "test:rules": "firebase emulators:exec --only firestore --project app-platform-rules-test 'vitest run --config vitest.rules.config.ts'"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

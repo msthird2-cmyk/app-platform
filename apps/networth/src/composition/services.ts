@@ -1,13 +1,12 @@
 import { InMemoryAuthService } from '@platform/auth';
 import { InMemoryAccountService } from '@platform/account';
-import { InMemoryBackupService } from '@platform/backup';
 import { InMemoryRepository } from '@platform/data';
 import { InMemoryRecoveryEscrowStore } from '@platform/security';
 import { createFirebaseApp, createFirebaseBackend } from '@platform/firebase';
 import type { FirebaseConfig } from '@platform/firebase';
 import type { AccountService } from '@platform/account';
 import type { AuthService } from '@platform/auth';
-import type { BackupService } from '@platform/backup';
+import type { BackupTransport } from '@platform/backup';
 import type { Repository } from '@platform/data';
 import type { PairingRelay, RecoveryEscrowStore } from '@platform/security';
 import { COLLECTIONS } from '../collections';
@@ -28,7 +27,12 @@ import { COLLECTIONS } from '../collections';
 export interface NetWorthServices {
   authService: AuthService;
   accountService: AccountService;
-  backupService: BackupService;
+  /**
+   * Where an exported backup goes. Not part of the backend: a backup never
+   * reaches a server, so this comes from the platform rather than from
+   * Firebase, and both compositions leave it to the entry point to supply.
+   */
+  backupTransport?: BackupTransport | undefined;
   repository: Repository;
   escrowStore: RecoveryEscrowStore;
   pairingRelay: PairingRelay | undefined;
@@ -59,7 +63,6 @@ export function createProductionServices(config: FirebaseConfig): NetWorthServic
   return {
     authService: backend.authService,
     accountService: backend.accountService,
-    backupService: backend.backupService,
     repository: backend.repository,
     escrowStore: backend.escrowStore,
     pairingRelay: backend.pairingRelay,
@@ -86,7 +89,6 @@ export function createPreviewServices(): NetWorthServices {
     accountService: new InMemoryAccountService({
       profile: { id: 'preview', email: 'you@example.com', displayName: 'You', createdAt: 0 },
     }),
-    backupService: new InMemoryBackupService(),
     repository: new InMemoryRepository(),
     escrowStore: new InMemoryRecoveryEscrowStore(),
     pairingRelay: undefined,

@@ -28,7 +28,7 @@ import { AppCore } from '@platform/core';
   collections={['assets', 'liabilities']}
   authService={firebaseAuthService}
   accountService={firebaseAccountService}
-  backupService={firebaseBackupService}
+  backupTransport={backupTransport}
   repository={firebaseRepository}
   cryptoService={cryptoService}
   secureStorage={secureStorage}
@@ -44,7 +44,7 @@ import { AppCore } from '@platform/core';
 | --- | --- |
 | `AppCore` | Theme + services + auth providers, with a signed-in / signed-out gate |
 | `ServicesProvider`, `useServices` | Dependency injection container |
-| `useAccountService`, `useBackupService`, `useRepository`, `useCryptoService`, `useAppConfig` | Typed accessors |
+| `useAccountService`, `useBackupTransport`, `useRepository`, `useCryptoService`, `useAppConfig` | Typed accessors. `useBackupTransport` is `undefined` where none was injected, and backup is then not offered |
 | `AppConfig`, `isFeatureEnabled` | Application-supplied configuration |
 
 ## Configuration

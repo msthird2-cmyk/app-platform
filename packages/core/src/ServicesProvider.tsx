@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { AuthService } from '@platform/auth';
 import type { AccountService } from '@platform/account';
-import type { BackupService } from '@platform/backup';
+import type { BackupTransport } from '@platform/backup';
 import type { EncryptedRepository, Repository } from '@platform/data';
 import type { CryptoService, SecureStorage } from '@platform/security';
 import type { AppConfig } from './config';
@@ -11,7 +11,15 @@ export interface PlatformServices {
   config: AppConfig;
   authService: AuthService;
   accountService: AccountService;
-  backupService: BackupService;
+  /**
+   * Where an exported backup goes, and where an imported one comes from.
+   *
+   * Optional, and offered nowhere without it — the same arrangement as
+   * `pairingRelay`. A backup needs a share sheet or a browser download, so a
+   * composition that has no way to hand the person a file simply does not
+   * present backup, rather than presenting one that silently goes nowhere.
+   */
+  backupTransport?: BackupTransport | undefined;
   repository: Repository;
   cryptoService: CryptoService;
   secureStorage: SecureStorage;
@@ -42,8 +50,9 @@ export function useAccountService(): AccountService {
   return useServices().accountService;
 }
 
-export function useBackupService(): BackupService {
-  return useServices().backupService;
+/** `undefined` where no transport was injected; screens hide backup then. */
+export function useBackupTransport(): BackupTransport | undefined {
+  return useServices().backupTransport;
 }
 
 /**
