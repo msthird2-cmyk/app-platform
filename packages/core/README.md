@@ -59,6 +59,16 @@ Every shared package.
 
 Composition only — no application business rules belong here. If a rule is specific to one app's domain, it goes in `apps/<name>/`.
 
+**`DataKeyGate` does not reset its per-user state on a lifecycle change —
+latent.** `recoveryCode` and `entered` (`src/DataKeyGate.tsx:110-111`) are not
+cleared by the effect keyed on `[lifecycle]` (`:121-131`), which overwrites only
+`state`. Because `dataKeyStep` gives a pending recovery code priority over every
+other state, a retained code would be rendered. This is **not reachable today**:
+every identity change in the current flows passes through `user === null`, which
+unmounts the gate (`AppCore.tsx:109`) and destroys the state with it. It becomes
+live the moment any flow switches identity without unmounting — which is worth
+knowing before writing one.
+
 ## Tests
 
 ```

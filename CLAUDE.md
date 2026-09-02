@@ -487,6 +487,13 @@ These hold at every stage of implementation, including partial ones.
   is enabled.
 - No silent plaintext fallback when the encryption key is unavailable.
 - A missing key fails closed.
+- A custody record is addressable only from the authenticated identity that
+  owns it. A second person signing in on the same device addresses their own
+  record and finds it empty; no path returns one user's data encryption key to
+  another user's session.
+- Custody cannot be constructed without an owning identity. This is enforced by
+  the type rather than by convention, because custody that can be built without
+  one addresses a record shared by everybody — which was the defect.
 - Losing all trusted devices is recoverable through the recovery code (Gate 3),
   and through nothing else. The optional data-key passphrase (Gate 7) is
   explicitly *not* a recovery path — it protects a device at rest, is never
@@ -646,6 +653,9 @@ Crypto/security tests must include:
 - wrong-key/tampered ciphertext rejected
 - app-lock escalation survives restart
 - sign-out clears session-local state
+- per-user custody isolation: distinct identities resolve to distinct records,
+  one identity resolves to the same record across restarts, and no identity
+  reaches another's key
 
 Deletion tests must prove re-authentication occurs before destructive calls, every declared collection is handled, interrupted deletion is resumable where promised, and local state is cleared.
 

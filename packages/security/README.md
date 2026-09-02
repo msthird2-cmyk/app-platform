@@ -102,6 +102,24 @@ Custody never creates a key. `load()` returns `null` for a genuine absence and t
 
 Custody belongs to an owner. `createKeyCustody` requires an authenticated identity and derives its own storage address from it, so a record is reachable only from that identity's session and two people sharing a device do not share a key. The owner is required rather than defaulted because a custody object that can be built without one addresses a record shared by everybody, which is the defect this replaced — the type is the enforcement, not a convention. The address is `platform.dek.v2.` followed by the hex SHA-256 of the identity: hashed so that any identifier a provider issues yields a storable key (`expo-secure-store` permits only `[A-Za-z0-9._-]`), and **not** for secrecy — anyone who can enumerate the keystore has already defeated what the address does. It is deterministic from the identity alone, with no device or install component, because an address that drifted would orphan a key whose owner can still reach it. An install predating per-user custody holds an orphaned `platform.dek.v1` record that nothing reads; its owner recovers with their recovery code.
 
+**Nothing clears custody, and the key outlives sign-out — live.** `clear()`
+(`keyCustody.ts:246-248`) has no production caller: sign-out
+(`packages/auth/src/AuthProvider.tsx:61-64`) signs the user out of the service
+and drops the lifecycle, but never touches the stored record. Per-user
+addressing means the record is no longer reachable from anyone else's session,
+so this is now a hygiene and data-residency question rather than a disclosure
+one — but the key does remain on the device indefinitely, and anything that
+wants it gone has to remove it deliberately.
+
+**`clear()` cannot reach a key written by a previous process — live.**
+`OsKeystoreStorage.clear()` (`services/OsKeystoreStorage.ts:159-162`) iterates
+only the keys this store instance wrote, and says so in its own comment
+(`:151-158`). `expo-secure-store` offers no enumeration and an unscoped wipe is
+banned by the architecture, so a record written before this launch can be
+removed only by a caller that already knows its address. With per-user
+addressing that address is derivable from the identity, so it is reachable in
+principle — but not discoverable by scanning.
+
 Recovery-code verification is deliberately *not* wired to any storage. Comparing a code on the client means handing the client the hash list to compare against, so the Firestore rules close that path; a trusted server has to own the check.
 
 ## Tests

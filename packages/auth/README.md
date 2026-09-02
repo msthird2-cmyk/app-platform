@@ -51,6 +51,18 @@ import { AuthProvider, LoginScreen } from '@platform/auth';
 
 No authentication is performed here — the injected `AuthService` does the work. Credential validation never echoes the password in a failure.
 
+**Cold start races the persistence restore — live.** `AuthProvider`
+(`src/AuthProvider.tsx:34-43`) calls `getCurrentUser()` and clears
+`initializing` in its `.finally()` (`:42`) regardless of the result. Firebase's
+implementation reads `auth.currentUser` synchronously
+(`packages/firebase/src/services/FirebaseAuthService.ts:51-54`), and that is
+`null` until the persisted session has been restored. Two consequences: on a
+cold start with a valid session the signed-out view can render before
+`onAuthStateChanged` delivers the real user, and in the losing interleaving the
+`.then()` at `:38` can overwrite an already-restored user with `null`. There is
+no custody impact — a null user builds no lifecycle and therefore no custody —
+but a signed-in person can be shown as signed out.
+
 ## Tests
 
 ```
