@@ -66,7 +66,9 @@ export default function App({
    */
   const dataKeyLifecycleFor = (userId: string) =>
     createDataKeyLifecycle({
-      custody: createKeyCustody(secureStorage, { minimumProtection }),
+      // The owner is what makes this record this user's. Without it two
+      // people on one device share a key; see `custodyAddress.ts`.
+      custody: createKeyCustody(secureStorage, { owner: userId, minimumProtection }),
       escrowStore,
       crypto: cryptoService,
       context: { userId, appName: APP_NAME },

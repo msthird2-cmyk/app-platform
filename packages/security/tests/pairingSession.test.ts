@@ -1,4 +1,5 @@
 import { webcrypto } from 'node:crypto';
+import { custodyAddressFor } from '../src/custodyAddress';
 import { describe, expect, it } from 'vitest';
 import { toBase64 } from '../src/crypto/base64';
 import {
@@ -28,6 +29,8 @@ import { P256KeyAgreement } from '../src/services/KeyAgreement';
 import { PortableRecordCipher } from '../src/services/PortableRecordCipher';
 import { WebCryptoService } from '../src/services/WebCryptoService';
 
+
+const TEST_OWNER = 'pairing-owner';
 /**
  * Pairing as the application performs it, rather than as the protocol defines
  * it.
@@ -88,7 +91,7 @@ interface Device {
 
 function device(escrowStore: RecoveryEscrowStore, userId = UID, appName = APP): Device {
   const storage = new FakeCustodyStorage();
-  const custody = createKeyCustody(storage);
+  const custody = createKeyCustody(storage, { owner: TEST_OWNER });
   return {
     storage,
     custody,
@@ -690,7 +693,7 @@ describe('P/Q — no failure ever mints a key', () => {
     const pair = await twoDevices();
     const broken = device(pair.escrowStore);
     // What an Android keystore invalidated by a lock-screen change looks like.
-    broken.storage.entries.set('platform.dek.v1', 'not-an-envelope');
+    broken.storage.entries.set(custodyAddressFor(TEST_OWNER), 'not-an-envelope');
     const session = createPairingSession({
       role: 'responder',
       relay: pair.relay,
@@ -708,7 +711,7 @@ describe('P/Q — no failure ever mints a key', () => {
     await settle();
     expect(session.view().reason).toBe('custody-unusable');
     // Untouched: overwriting it would orphan every record under the old key.
-    expect(broken.storage.entries.get('platform.dek.v1')).toBe('not-an-envelope');
+    expect(broken.storage.entries.get(custodyAddressFor(TEST_OWNER))).toBe('not-an-envelope');
   });
 
   it('reports the same state after a restart as before the failed pairing', async () => {
@@ -720,7 +723,7 @@ describe('P/Q — no failure ever mints a key', () => {
     // Q: a new lifecycle over the same storage — a relaunch — still sees a
     // device that needs recovery, not one that needs a brand new key.
     const restarted = createDataKeyLifecycle({
-      custody: createKeyCustody(pair.fresh.storage),
+      custody: createKeyCustody(pair.fresh.storage, { owner: TEST_OWNER }),
       escrowStore: pair.escrowStore,
       crypto,
       context: { userId: UID, appName: APP },
@@ -783,7 +786,7 @@ describe('DataKeyLifecycle pairing entry points', () => {
 
   it('refuses to export from a device whose stored key is unreadable', async () => {
     const broken = device(new SharedEscrowStore());
-    broken.storage.entries.set('platform.dek.v1', '{}');
+    broken.storage.entries.set(custodyAddressFor(TEST_OWNER), '{}');
     await expect(
       broken.lifecycle.exportForPairing({
         transportKey: new Uint8Array(32).fill(9),
@@ -810,7 +813,7 @@ describe('DataKeyLifecycle pairing entry points', () => {
 
   it('refuses to adopt over a key it cannot read', async () => {
     const broken = device(new SharedEscrowStore());
-    broken.storage.entries.set('platform.dek.v1', '{}');
+    broken.storage.entries.set(custodyAddressFor(TEST_OWNER), '{}');
     await expect(
       broken.lifecycle.adoptPairedKey({
         session: null,

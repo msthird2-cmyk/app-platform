@@ -258,6 +258,7 @@ Approved design, now **partly implemented**. What exists today:
 | --- | --- |
 | Portable crypto on Hermes (X-1) | implemented, verified on Android API 29 and 34 |
 | Secure key custody (Gate 2) | implemented — `keyCustody.ts`, protection tiers |
+| Per-user custody isolation (Gate 8) | implemented — `custodyAddress.ts`; custody requires an owner and derives its address from that identity |
 | Recovery-code escrow (Gate 3) | implemented — `recoveryEscrow.ts` |
 | DEK lifecycle and persistence | implemented — `dataKeyLifecycle.ts`, `DataKeyGate` |
 | Record encryption (X-2) | implemented — `recordCrypto.ts`, `EncryptingRepository` |

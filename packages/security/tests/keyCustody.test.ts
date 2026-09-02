@@ -1,4 +1,5 @@
 import { webcrypto } from 'node:crypto';
+import { custodyAddressFor } from '../src/custodyAddress';
 import { describe, expect, it } from 'vitest';
 import { createKeyCustody, type CustodyStorage } from '../src/keyCustody';
 import { InMemorySecureStorage } from '../src/services/InMemorySecureStorage';
@@ -13,12 +14,14 @@ import { SecurityErrorCode } from '../src/errors';
 import { meetsProtection, type ProtectionTier } from '../src/protectionTier';
 import { toBase64 } from '../src/crypto/base64';
 
+
+const TEST_OWNER = 'custody-owner';
 const randomBytes = (length: number): Uint8Array =>
   webcrypto.getRandomValues(new Uint8Array(length));
 
 /** Deterministic, obviously fake, and never zero. */
 const TEST_DEK = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 13) % 256);
-const STORAGE_KEY = 'platform.dek.v1';
+const STORAGE_KEY = custodyAddressFor(TEST_OWNER);
 
 /** A store at whatever tier a case needs, with hooks for making reads fail. */
 class Fake implements CustodyStorage {
@@ -60,40 +63,41 @@ describe('protection tiers', () => {
 
 describe('minimum-tier enforcement', () => {
   it('refuses to construct custody over process memory', () => {
-    expect(() => createKeyCustody(new Fake('memory'))).toThrowError(
+    expect(() => createKeyCustody(new Fake('memory'), { owner: TEST_OWNER })).toThrowError(
       expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
     );
     // Even when the caller lowers the bar as far as the type system permits.
     expect(() =>
-      createKeyCustody(new Fake('memory'), { minimumProtection: 'browser-nonextractable' }),
+      createKeyCustody(new Fake('memory'), { owner: TEST_OWNER, minimumProtection: 'browser-nonextractable' }),
     ).toThrowError(expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }));
   });
 
   it('refuses the browser tier unless the caller opts into it explicitly', () => {
-    expect(() => createKeyCustody(new Fake('browser-nonextractable'))).toThrowError(
+    expect(() => createKeyCustody(new Fake('browser-nonextractable'), { owner: TEST_OWNER })).toThrowError(
       expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
     );
     expect(() =>
       createKeyCustody(new Fake('browser-nonextractable'), {
+        owner: TEST_OWNER,
         minimumProtection: 'browser-nonextractable',
       }),
     ).not.toThrow();
   });
 
   it('accepts the keystore tier by default', () => {
-    expect(() => createKeyCustody(new Fake('os-keystore'))).not.toThrow();
+    expect(() => createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER })).not.toThrow();
   });
 });
 
 describe('custody lifecycle', () => {
   it('reports absent before anything is stored, and load returns null', async () => {
-    const custody = createKeyCustody(new Fake('os-keystore'));
+    const custody = createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER });
     await expect(custody.status()).resolves.toBe('absent');
     await expect(custody.load()).resolves.toBeNull();
   });
 
   it('stores and loads the exact bytes', async () => {
-    const custody = createKeyCustody(new Fake('os-keystore'));
+    const custody = createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
     await expect(custody.status()).resolves.toBe('present');
     const loaded = await custody.load();
@@ -102,7 +106,7 @@ describe('custody lifecycle', () => {
   });
 
   it('clears back to absent', async () => {
-    const custody = createKeyCustody(new Fake('os-keystore'));
+    const custody = createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
     await custody.clear();
     await expect(custody.status()).resolves.toBe('absent');
@@ -111,7 +115,7 @@ describe('custody lifecycle', () => {
 
   it('replaces rather than appends', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
     const other = Uint8Array.from({ length: 32 }, (_, i) => (i * 11 + 3) % 256);
     await custody.store(other);
@@ -120,7 +124,7 @@ describe('custody lifecycle', () => {
   });
 
   it('refuses anything that is not a 32-byte key', async () => {
-    const custody = createKeyCustody(new Fake('os-keystore'));
+    const custody = createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER });
     for (const bad of [new Uint8Array(16), new Uint8Array(64), new Uint8Array(0)]) {
       await expect(custody.store(bad)).rejects.toMatchObject({
         code: SecurityErrorCode.KEY_CUSTODY_INVALID,
@@ -132,7 +136,7 @@ describe('custody lifecycle', () => {
   });
 
   it('refuses an all-zero key, which is a stub rather than a key', async () => {
-    const custody = createKeyCustody(new Fake('os-keystore'));
+    const custody = createKeyCustody(new Fake('os-keystore'), { owner: TEST_OWNER });
     await expect(custody.store(new Uint8Array(32))).rejects.toMatchObject({
       code: SecurityErrorCode.KEY_CUSTODY_INVALID,
     });
@@ -147,7 +151,7 @@ describe('custody lifecycle', () => {
 describe('unreadable is never absent', () => {
   it('reports unusable when the stored value is corrupt', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     for (const corrupt of [
       'not json at all',
       JSON.stringify({ v: 1 }),
@@ -165,7 +169,7 @@ describe('unreadable is never absent', () => {
 
   it('reports unusable — never absent — when the read throws', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
 
     storage.failNextGet = new Error('keystore key invalidated');
@@ -179,7 +183,7 @@ describe('unreadable is never absent', () => {
 
   it('fails closed on a transient read failure and recovers afterwards', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
 
     storage.failNextGet = new Error('transient');
@@ -193,7 +197,7 @@ describe('unreadable is never absent', () => {
 
   it('never invents a replacement key', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     storage.entries.set(STORAGE_KEY, 'corrupt');
 
     await expect(custody.load()).rejects.toThrow();
@@ -221,7 +225,7 @@ describe('a protected key is present and shut', () => {
 
   it('reports protected — never absent, and never present', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     storage.entries.set(STORAGE_KEY, WRAPPED);
 
     const status = await custody.status();
@@ -235,7 +239,7 @@ describe('a protected key is present and shut', () => {
 
   it('throws rather than returning null from load()', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     storage.entries.set(STORAGE_KEY, WRAPPED);
 
     // `null` is the contract's word for "there is no key". Returning it here
@@ -248,7 +252,7 @@ describe('a protected key is present and shut', () => {
 
   it('hands back the wrapper for opening, and nothing else does', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     storage.entries.set(STORAGE_KEY, WRAPPED);
 
     expect(await custody.loadWrapped()).toEqual(JSON.parse(WRAPPED).w);
@@ -256,7 +260,7 @@ describe('a protected key is present and shut', () => {
 
   it('reports no wrapper for an unprotected or empty device', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
 
     expect(await custody.loadWrapped()).toBeNull();
     await custody.store(TEST_DEK);
@@ -267,7 +271,7 @@ describe('a protected key is present and shut', () => {
 
   it('storing a wrapper replaces the plain key in the same slot', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
 
     await custody.storeWrapped(JSON.parse(WRAPPED).w);
@@ -280,7 +284,7 @@ describe('a protected key is present and shut', () => {
 
   it('storing a plain key over a wrapper unprotects it, which recovery relies on', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     storage.entries.set(STORAGE_KEY, WRAPPED);
 
     // Deliberate. Recovery and pairing both call `store`, both are moments at
@@ -292,7 +296,7 @@ describe('a protected key is present and shut', () => {
 
   it('refuses a wrapper that is not even an object', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     for (const bad of [null, undefined, 'wrapper', 42]) {
       await expect(custody.storeWrapped(bad)).rejects.toMatchObject({
         code: SecurityErrorCode.KEY_CUSTODY_INVALID,
@@ -303,7 +307,7 @@ describe('a protected key is present and shut', () => {
 
   it('a malformed v2 envelope is unusable, not absent and not protected', async () => {
     const storage = new Fake('os-keystore');
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     for (const bad of [
       JSON.stringify({ v: 2 }),
       JSON.stringify({ v: 2, w: null }),
@@ -368,7 +372,7 @@ describe('OsKeystoreStorage', () => {
     const storage = await OsKeystoreStorage.create(store, {});
     expect(storage.protection).toBe('os-keystore');
 
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
     expect(Array.from((await custody.load()) as Uint8Array)).toEqual(Array.from(TEST_DEK));
 
@@ -427,7 +431,7 @@ describe('OsKeystoreStorage', () => {
     });
     const storage = await OsKeystoreStorage.create(store, {});
     await expect(storage.get('k')).rejects.toThrow();
-    await expect(createKeyCustody(storage).status()).resolves.toBe('unusable');
+    await expect(createKeyCustody(storage, { owner: TEST_OWNER }).status()).resolves.toBe('unusable');
   });
 
   // The four cases below are the regression for a defect the emulator gate
@@ -530,7 +534,7 @@ describe('WebNonExtractableStorage', () => {
       database: database(),
       randomBytes,
     });
-    const custody = createKeyCustody(storage, { minimumProtection: 'browser-nonextractable' });
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER, minimumProtection: 'browser-nonextractable' });
     await expect(custody.status()).resolves.toBe('absent');
     await custody.store(TEST_DEK);
     await expect(custody.status()).resolves.toBe('present');
@@ -542,7 +546,7 @@ describe('WebNonExtractableStorage', () => {
   it('writes no raw key bytes into the database', async () => {
     const db = database();
     const storage = await WebNonExtractableStorage.create({ subtle, database: db, randomBytes });
-    await createKeyCustody(storage, { minimumProtection: 'browser-nonextractable' }).store(TEST_DEK);
+    await createKeyCustody(storage, { owner: TEST_OWNER, minimumProtection: 'browser-nonextractable' }).store(TEST_DEK);
 
     const serialisable = [...db.entries.entries()].filter(([name]) => name !== '__platform.kek');
     const dump = JSON.stringify(serialisable);
@@ -558,12 +562,12 @@ describe('WebNonExtractableStorage', () => {
   it('reports unusable when the wrapping key can no longer open a blob', async () => {
     const db = database();
     const storage = await WebNonExtractableStorage.create({ subtle, database: db, randomBytes });
-    await createKeyCustody(storage, { minimumProtection: 'browser-nonextractable' }).store(TEST_DEK);
+    await createKeyCustody(storage, { owner: TEST_OWNER, minimumProtection: 'browser-nonextractable' }).store(TEST_DEK);
 
     // A cleared origin regenerates the wrapping key; the old blob survives.
     db.entries.delete('__platform.kek');
     const reopened = await WebNonExtractableStorage.create({ subtle, database: db, randomBytes });
-    const custody = createKeyCustody(reopened, { minimumProtection: 'browser-nonextractable' });
+    const custody = createKeyCustody(reopened, { owner: TEST_OWNER, minimumProtection: 'browser-nonextractable' });
     await expect(custody.status()).resolves.toBe('unusable');
     await expect(custody.load()).rejects.toMatchObject({
       code: SecurityErrorCode.KEY_CUSTODY_UNUSABLE,
@@ -628,7 +632,7 @@ describe('createPlatformSecureStorage', () => {
     expect(storage.protection).toBe('os-keystore');
 
     // And it is a working store, not merely a constructed one.
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     expect(await custody.status()).toBe('absent');
     await custody.store(TEST_DEK);
     expect(Array.from((await custody.load()) as Uint8Array)).toEqual(Array.from(TEST_DEK));
