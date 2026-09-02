@@ -1,6 +1,7 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toBase64 } from '../src/crypto/base64';
+import { custodyAddressFor } from '../src/custodyAddress';
 import {
   createDataKeyLifecycle,
   type DataKeyLifecycle,
@@ -100,7 +101,7 @@ function harness(
 ): Harness {
   return {
     lifecycle: createDataKeyLifecycle({
-      custody: createKeyCustody(custodyStorage),
+      custody: createKeyCustody(custodyStorage, { owner: CONTEXT.userId }),
       escrowStore,
       crypto,
       context: CONTEXT,
@@ -125,7 +126,7 @@ async function protectedDevice(): Promise<Harness & { recoveryCode: string; key:
 /** A restart: same storage, a lifecycle that has never held the opened key. */
 function restart(h: Harness): DataKeyLifecycle {
   return createDataKeyLifecycle({
-    custody: createKeyCustody(h.custodyStorage),
+    custody: createKeyCustody(h.custodyStorage, { owner: CONTEXT.userId }),
     escrowStore: h.escrowStore,
     crypto,
     context: CONTEXT,
@@ -164,13 +165,13 @@ describe('A — putting a passphrase on a device that has a key', () => {
   it('refuses a weak passphrase, leaving the key unprotected rather than half-protected', async () => {
     const h = harness();
     await h.lifecycle.initialize();
-    const before = h.custodyStorage.entries.get('platform.dek.v1');
+    const before = h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId));
 
     await expect(h.lifecycle.protect('x')).rejects.toMatchObject({
       code: SecurityErrorCode.PASSPHRASE_TOO_WEAK,
     });
 
-    expect(h.custodyStorage.entries.get('platform.dek.v1')).toBe(before);
+    expect(h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId))).toBe(before);
     expect(await h.lifecycle.isProtected()).toBe(false);
   });
 });
@@ -260,7 +261,7 @@ describe('C — the passphrase is never written anywhere', () => {
     // in a second place. A second slot is a second thing to leak and a second
     // thing to forget to clear.
     const h = await protectedDevice();
-    expect([...h.custodyStorage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...h.custodyStorage.entries.keys()]).toEqual([custodyAddressFor(CONTEXT.userId)]);
   });
 
   it('is not recoverable from what is stored, even knowing the key', async () => {
@@ -269,7 +270,7 @@ describe('C — the passphrase is never written anywhere', () => {
     // against, which is what keeps an offline guess expensive.
     const h = await protectedDevice();
     const envelope = JSON.parse(
-      h.custodyStorage.entries.get('platform.dek.v1') as string,
+      h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId)) as string,
     ) as { v: number; w: { version: number; wrappedKey: Record<string, unknown> } };
 
     expect(envelope.v).toBe(2);
@@ -532,11 +533,11 @@ describe('G — pairing neither carries the passphrase nor is weakened by it', (
 describe('H — the protected envelope is not a way around anything', () => {
   it('a corrupt wrapper is unusable, not absent', async () => {
     const h = await protectedDevice();
-    const raw = JSON.parse(h.custodyStorage.entries.get('platform.dek.v1') as string) as {
+    const raw = JSON.parse(h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId)) as string) as {
       v: number;
       w: unknown;
     };
-    h.custodyStorage.entries.set('platform.dek.v1', JSON.stringify({ v: 2, w: 'not an object' }));
+    h.custodyStorage.entries.set(custodyAddressFor(CONTEXT.userId), JSON.stringify({ v: 2, w: 'not an object' }));
     void raw;
 
     const fresh = restart(h);
@@ -548,8 +549,15 @@ describe('H — the protected envelope is not a way around anything', () => {
 
   it('a wrapper from another user does not open on this one', async () => {
     const mine = await protectedDevice();
+
+    // Custody is addressed by owner now, so the *storage* layer already keeps
+    // Mallory away from this record — asserted separately below. That would
+    // quietly retire the assertion this test exists for, which is about the
+    // AAD rather than the address. So the custody here is deliberately given
+    // Alice's owner: Mallory genuinely reads Alice's stored bytes, and the only
+    // thing left to refuse her is the tag.
     const theirs = createDataKeyLifecycle({
-      custody: createKeyCustody(mine.custodyStorage),
+      custody: createKeyCustody(mine.custodyStorage, { owner: CONTEXT.userId }),
       escrowStore: mine.escrowStore,
       crypto,
       context: { userId: 'mallory-uid', appName: APP },
@@ -560,6 +568,25 @@ describe('H — the protected envelope is not a way around anything', () => {
     // the wrapper to an identity, so this is a tag failure and not a key.
     await expect(theirs.unlock(PASSPHRASE)).rejects.toMatchObject({
       code: SecurityErrorCode.DECRYPTION_FAILED,
+    });
+  });
+
+  it('and with her own identity she cannot reach the record at all', async () => {
+    // The newer, stronger property, stated as its own case rather than folded
+    // into the one above: an ordinary second user addresses her own slot, so
+    // Alice's wrapper is not merely unopenable, it is invisible.
+    const mine = await protectedDevice();
+    const mallory = createDataKeyLifecycle({
+      custody: createKeyCustody(mine.custodyStorage, { owner: 'mallory-uid' }),
+      escrowStore: mine.escrowStore,
+      crypto,
+      context: { userId: 'mallory-uid', appName: APP },
+      randomBytes,
+    });
+
+    expect(await mallory.isProtected()).toBe(false);
+    await expect(mallory.unlock(PASSPHRASE)).rejects.toMatchObject({
+      code: SecurityErrorCode.DATA_KEY_UNAVAILABLE,
     });
   });
 
@@ -594,7 +621,7 @@ describe('I — an install that predates the passphrase', () => {
     // feature reaches into one.
     const h = harness();
     await h.lifecycle.initialize();
-    const stored = JSON.parse(h.custodyStorage.entries.get('platform.dek.v1') as string) as {
+    const stored = JSON.parse(h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId)) as string) as {
       v: number;
       k: string;
     };
@@ -615,7 +642,7 @@ describe('I — an install that predates the passphrase', () => {
     const fresh = restart(h);
     await fresh.recover(h.recoveryCode);
 
-    const stored = JSON.parse(h.custodyStorage.entries.get('platform.dek.v1') as string) as {
+    const stored = JSON.parse(h.custodyStorage.entries.get(custodyAddressFor(CONTEXT.userId)) as string) as {
       v: number;
     };
     expect(stored.v).toBe(1);

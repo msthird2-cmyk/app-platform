@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { custodyAddressFor } from '../src/custodyAddress';
 import { fromBase64, toBase64 } from '../src/crypto/base64';
 import { additionalData } from '../src/crypto/envelope';
 import { utf8Decode } from '../src/crypto/utf8';
@@ -19,6 +20,8 @@ import {
 import { WebCryptoService } from '../src/services/WebCryptoService';
 import type { EncryptedPayload, EncryptionContext } from '../src/types/crypto';
 
+
+const TEST_OWNER = 'custody-owner';
 /**
  * The minimum cost keeps the suite fast; production uses the policy default.
  * Nothing here lowers the policy — `MIN_KDF_ITERATIONS` is the same floor the
@@ -318,7 +321,7 @@ describe('recovery escrow — context binding', () => {
 describe('zero-trusted-device recovery', () => {
   async function scenario() {
     const storage = new Fake();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     const escrow = await createRecoveryEscrow(TEST_DEK, CODE, crypto, CONTEXT);
     // The user had the key on a device, and that device is gone.
     await custody.store(TEST_DEK);
@@ -342,7 +345,7 @@ describe('zero-trusted-device recovery', () => {
     expect(Array.from((await custody.load()) as Uint8Array)).toEqual(Array.from(TEST_DEK));
 
     // It went through Gate 2 custody and nowhere else.
-    expect([...storage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...storage.entries.keys()]).toEqual([custodyAddressFor(TEST_OWNER)]);
   });
 
   it('leaves custody empty when the recovery code is wrong', async () => {
@@ -382,7 +385,7 @@ describe('zero-trusted-device recovery', () => {
 
   it('refuses to recover into storage weaker than the required tier', async () => {
     // Gate 2's guarantee is not relaxed just because this is a recovery path.
-    expect(() => createKeyCustody(new Fake('memory'))).toThrowError(
+    expect(() => createKeyCustody(new Fake('memory'), { owner: TEST_OWNER })).toThrowError(
       expect.objectContaining({ code: SecurityErrorCode.SECURE_STORAGE_UNAVAILABLE }),
     );
   });
@@ -391,7 +394,7 @@ describe('zero-trusted-device recovery', () => {
     // End to end through both gates: what custody stores is what escrow
     // restores, byte for byte.
     const storage = new Fake();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(TEST_DEK);
     const held = (await custody.load()) as Uint8Array;
     const escrow = await createRecoveryEscrow(held, CODE, crypto, CONTEXT);

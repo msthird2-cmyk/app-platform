@@ -297,7 +297,7 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
         storage.protection,
       );
 
-      const custody = createKeyCustody(storage, { storageKey: 'x1.selftest.dek' });
+      const custody = createKeyCustody(storage, { owner: 'x1.selftest.owner' });
 
       // Start from a known-clean slate: a previous run may have left a key.
       await custody.clear();
@@ -323,7 +323,7 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       // Fail-closed paths, on the device rather than against a mock.
       let refusedMemory = false;
       try {
-        createKeyCustody(new security.InMemorySecureStorage());
+        createKeyCustody(new security.InMemorySecureStorage(), { owner: 'x1.selftest.owner' });
       } catch {
         refusedMemory = true;
       }
@@ -581,10 +581,12 @@ export async function runSelfTest(): Promise<SelfTestOutcome> {
       // touches the recovery escrow, and neither lifecycle is initialised — the
       // trusted device's key is placed in custody directly, exactly as the
       // block above does.
-      const trustedStorageKey = 'x1.selftest.pair.trusted';
-      const freshStorageKey = 'x1.selftest.pair.fresh';
-      const trustedCustody = createKeyCustody(storage, { storageKey: trustedStorageKey });
-      const freshCustody = createKeyCustody(storage, { storageKey: freshStorageKey });
+      // Two owners rather than two storage keys: this simulates two devices,
+      // and an owner is now the only way to address a custody record.
+      const trustedOwner = 'x1.selftest.pair.trusted';
+      const freshOwner = 'x1.selftest.pair.fresh';
+      const trustedCustody = createKeyCustody(storage, { owner: trustedOwner });
+      const freshCustody = createKeyCustody(storage, { owner: freshOwner });
       await trustedCustody.clear();
       await freshCustody.clear();
       await trustedCustody.store(TEST_DEK);

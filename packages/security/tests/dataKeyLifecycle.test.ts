@@ -1,4 +1,5 @@
 import { webcrypto } from 'node:crypto';
+import { custodyAddressFor } from '../src/custodyAddress';
 import { describe, expect, it } from 'vitest';
 import { toBase64 } from '../src/crypto/base64';
 import {
@@ -15,6 +16,8 @@ import type { RecoveryEscrowDocument } from '../src/recoveryEscrow';
 import { WebCryptoService } from '../src/services/WebCryptoService';
 import type { EncryptionContext } from '../src/types/crypto';
 
+
+const TEST_OWNER = 'alice-uid';
 /**
  * The lifecycle, not the primitives.
  *
@@ -74,7 +77,7 @@ function harness(
   custodyStorage = new FakeCustodyStorage(),
   escrowStore = new FakeEscrowStore(),
 ): Harness {
-  const custody = createKeyCustody(custodyStorage);
+  const custody = createKeyCustody(custodyStorage, { owner: TEST_OWNER });
   return {
     lifecycle: createDataKeyLifecycle({
       custody,
@@ -106,7 +109,7 @@ describe('A — first-time setup', () => {
     expect((key as Uint8Array).length).toBe(32);
 
     // Custody holds it, and holds exactly one thing.
-    expect([...custodyStorage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...custodyStorage.entries.keys()]).toEqual([custodyAddressFor(TEST_OWNER)]);
     // Firestore holds one escrow.
     expect(escrowStore.saves).toBe(1);
     expect(escrowStore.document).not.toBeNull();
@@ -173,7 +176,7 @@ describe('B — restart', () => {
     expect(await bytes(restarted)).toEqual(original);
     // No second key, and no second escrow.
     expect(escrowStore.saves).toBe(1);
-    expect([...custodyStorage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...custodyStorage.entries.keys()]).toEqual([custodyAddressFor(TEST_OWNER)]);
   });
 
   it('does not read the escrow at all when a key is already held', async () => {
@@ -207,7 +210,7 @@ describe('G — an existing key is never replaced', () => {
   it('refuses first-time setup when the stored key is unreadable', async () => {
     // The case that destroys data if it is mistaken for "no key yet".
     const custodyStorage = new FakeCustodyStorage();
-    custodyStorage.entries.set('platform.dek.v1', 'not json');
+    custodyStorage.entries.set(custodyAddressFor(TEST_OWNER), 'not json');
     const { lifecycle, escrowStore } = harness(custodyStorage);
 
     expect(await lifecycle.status()).toBe('unusable');
@@ -215,7 +218,7 @@ describe('G — an existing key is never replaced', () => {
       code: SecurityErrorCode.KEY_CUSTODY_INVALID,
     });
     expect(escrowStore.saves).toBe(0);
-    expect(custodyStorage.entries.get('platform.dek.v1')).toBe('not json');
+    expect(custodyStorage.entries.get(custodyAddressFor(TEST_OWNER))).toBe('not json');
   });
 
   it('refuses first-time setup when the escrow cannot be read', async () => {
@@ -252,7 +255,7 @@ describe('C — recovery', () => {
     expect(await lifecycle.status()).toBe('ready');
     expect(await bytes(lifecycle)).toEqual(original);
     // Through Gate 2 custody, and nowhere else.
-    expect([...custodyStorage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...custodyStorage.entries.keys()]).toEqual([custodyAddressFor(TEST_OWNER)]);
   });
 
   it('accepts the code as the user retypes it', async () => {

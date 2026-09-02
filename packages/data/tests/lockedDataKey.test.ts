@@ -1,6 +1,7 @@
 import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  custodyAddressFor,
   PortableRecordCipher,
   SecurityError,
   SecurityErrorCode,
@@ -102,7 +103,7 @@ const escrowStore = () => {
  */
 function build(storage = new FakeCustodyStorage(), store = escrowStore()) {
   const lifecycle = createDataKeyLifecycle({
-    custody: createKeyCustody(storage),
+    custody: createKeyCustody(storage, { owner: USER_ID }),
     escrowStore: store,
     crypto: {
       // The lifecycle needs a CryptoService only for the escrow and the
@@ -138,7 +139,7 @@ function build(storage = new FakeCustodyStorage(), store = escrowStore()) {
  */
 function withProtectedKey(storage: FakeCustodyStorage): void {
   storage.entries.set(
-    'platform.dek.v1',
+    custodyAddressFor(USER_ID),
     JSON.stringify({
       v: 2,
       w: {
@@ -160,7 +161,7 @@ function withProtectedKey(storage: FakeCustodyStorage): void {
 async function deviceWithOneRecord() {
   const storage = new FakeCustodyStorage();
   storage.entries.set(
-    'platform.dek.v1',
+    custodyAddressFor(USER_ID),
     JSON.stringify({ v: 1, k: Buffer.from(randomBytes(32)).toString('base64') }),
   );
   const built = build(storage);
@@ -228,7 +229,7 @@ describe('a locked key at the persistence boundary', () => {
     const storage = new FakeCustodyStorage();
     const key = randomBytes(32);
     storage.entries.set(
-      'platform.dek.v1',
+      custodyAddressFor(USER_ID),
       JSON.stringify({ v: 1, k: Buffer.from(key).toString('base64') }),
     );
     const { repository, spy } = build(storage);
@@ -274,12 +275,12 @@ describe('a locked key at the persistence boundary', () => {
     const storage = new FakeCustodyStorage();
     const key = randomBytes(32);
     storage.entries.set(
-      'platform.dek.v1',
+      custodyAddressFor(USER_ID),
       JSON.stringify({ v: 1, k: Buffer.from(key).toString('base64') }),
     );
     let asked = 0;
     const spy = new SpyRepository();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: USER_ID });
     const repository = new EncryptingRepository({
       inner: spy,
       cipher,

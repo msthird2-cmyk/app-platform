@@ -16,9 +16,11 @@ export {
   type KeyCustody,
   type KeyCustodyStatus,
   type KeyCustodyOptions,
+  type KeyCustodyOwner,
   type CustodyStorage,
   createKeyCustody,
 } from './keyCustody';
+export { CUSTODY_ADDRESS_PREFIX, custodyAddressFor } from './custodyAddress';
 export {
   OsKeystoreStorage,
   type SecureStoreBackend,

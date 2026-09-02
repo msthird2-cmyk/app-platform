@@ -1,4 +1,5 @@
 import { fromBase64, toBase64 } from './crypto/base64';
+import { custodyAddressFor } from './custodyAddress';
 import { SecurityError, SecurityErrorCode } from './errors';
 import { assertMeetsProtection, type RequiredProtectionTier } from './protectionTier';
 import type { SecureStorage } from './types/storage';
@@ -89,11 +90,20 @@ export interface KeyCustodyOptions {
    * expressible: see `RequiredProtectionTier`.
    */
   minimumProtection?: RequiredProtectionTier;
-  /** Namespaces the entry. Applications sharing a device do not share a key. */
-  storageKey?: string;
 }
 
-const DEFAULT_STORAGE_KEY = 'platform.dek.v1';
+export interface KeyCustodyOwner {
+  /**
+   * The authenticated identity this custody record belongs to.
+   *
+   * Required, and deliberately not defaulted. A custody object that can be
+   * constructed without an identity is one that addresses a slot shared by
+   * everyone on the device, which is the defect this parameter removes. Making
+   * it optional would make the unsafe form expressible again, so the type is
+   * the enforcement rather than a convention callers are asked to follow.
+   */
+  owner: string;
+}
 
 /** AES-256. A key of any other length did not come from this system. */
 const KEY_BYTES = 32;
@@ -156,13 +166,15 @@ function decode(raw: string): Decoded | undefined {
 
 export function createKeyCustody(
   storage: CustodyStorage,
-  options: KeyCustodyOptions = {},
+  options: KeyCustodyOptions & KeyCustodyOwner,
 ): KeyCustody {
   const required = options.minimumProtection ?? 'os-keystore';
   // Checked once, at construction, so a misconfigured application fails at
   // startup rather than the first time it touches a key.
   assertMeetsProtection(storage.protection, required);
-  const storageKey = options.storageKey ?? DEFAULT_STORAGE_KEY;
+  // Resolved once, from the owner, and never from a caller-supplied string.
+  // There is exactly one way to address a custody record.
+  const storageKey = custodyAddressFor(options.owner);
 
   return {
     async status() {

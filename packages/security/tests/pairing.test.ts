@@ -1,4 +1,5 @@
 import { webcrypto } from 'node:crypto';
+import { custodyAddressFor } from '../src/custodyAddress';
 import { describe, expect, it } from 'vitest';
 import { toBase64 } from '../src/crypto/base64';
 import {
@@ -21,6 +22,8 @@ import type { ProtectionTier } from '../src/protectionTier';
 import { P256KeyAgreement } from '../src/services/KeyAgreement';
 import { PortableRecordCipher } from '../src/services/PortableRecordCipher';
 
+
+const TEST_OWNER = 'pairing-owner';
 const randomBytes = (length: number): Uint8Array =>
   webcrypto.getRandomValues(new Uint8Array(length));
 
@@ -264,11 +267,11 @@ describe('C — wrapped data encryption key', () => {
     const recovered = await completePairing({
       session: { ...published, wrapped },
       transportKey: fromResponder.transportKey,
-      context, cipher, custody: createKeyCustody(storage), now: NOW,
+      context, cipher, custody: createKeyCustody(storage, { owner: TEST_OWNER }), now: NOW,
     });
 
     expect(Array.from(recovered)).toEqual(Array.from(DEK));
-    expect([...storage.entries.keys()]).toEqual(['platform.dek.v1']);
+    expect([...storage.entries.keys()]).toEqual([custodyAddressFor(TEST_OWNER)]);
     // The relay never saw the key.
     expect(JSON.stringify(wrapped)).not.toContain(toBase64(DEK));
   });
@@ -291,7 +294,7 @@ describe('C — wrapped data encryption key', () => {
         completePairing({
           session: { ...published, wrapped: envelope },
           transportKey: key, context, cipher,
-          custody: createKeyCustody(storage), now: NOW,
+          custody: createKeyCustody(storage, { owner: TEST_OWNER }), now: NOW,
         }),
         label,
       ).rejects.toMatchObject({ code: SecurityErrorCode.DECRYPTION_FAILED });
@@ -316,7 +319,7 @@ describe('C — wrapped data encryption key', () => {
         completePairing({
           session: { ...published, wrapped },
           transportKey: fromResponder.transportKey,
-          context: wrong, cipher, custody: createKeyCustody(storage), now: NOW,
+          context: wrong, cipher, custody: createKeyCustody(storage, { owner: TEST_OWNER }), now: NOW,
         }),
         JSON.stringify(wrong),
       ).rejects.toMatchObject({ code: SecurityErrorCode.DECRYPTION_FAILED });
@@ -470,7 +473,7 @@ describe('E — state machine', () => {
     });
 
     const storage = new FakeCustody();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await completePairing({
       session: { ...accepted, wrapped }, transportKey: b.transportKey,
       context, cipher, custody, now: NOW,
@@ -511,7 +514,7 @@ describe('F — failure never costs a key', () => {
 
     const failures: Array<[string, () => Promise<unknown>]> = [];
     const storage = new FakeCustody();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
 
     failures.push(['no wrapped payload', () =>
       completePairing({ session: accepted, transportKey: b.transportKey, context, cipher, custody, now: NOW })]);
@@ -552,7 +555,7 @@ describe('F — failure never costs a key', () => {
 
     const existing = Uint8Array.from({ length: 32 }, (_, i) => (i * 11 + 3) % 256);
     const storage = new FakeCustody();
-    const custody = createKeyCustody(storage);
+    const custody = createKeyCustody(storage, { owner: TEST_OWNER });
     await custody.store(existing);
 
     await expect(
