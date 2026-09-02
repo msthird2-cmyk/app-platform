@@ -54,6 +54,14 @@ Every string is a prop. `requireConfirmation` and `confirmationPhrase` gate the 
 
 ## Limitations
 
+**`deleteAccountFlow` has no production caller — live.** The flow
+(`src/services/deleteAccountFlow.ts:29`) is implemented and tested, but nothing
+in `apps/` or elsewhere in `packages/` invokes it; the only suppliers of its
+`clearLocalState` callback are this package's own tests. Account deletion is
+therefore not reachable by a user today, and the local-state cleanup that flow
+would perform — including anything owed to a device key — does not run because
+the flow does not run.
+
 The deletion order is deliberate and covered by a regression test:
 
 ```
