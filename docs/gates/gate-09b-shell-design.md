@@ -450,7 +450,7 @@ export interface ShellCapabilities {
   readonly backupAvailable: boolean;         // a BackupTransport was injected
   readonly pairingAvailable: boolean;        // a PairingRelay was injected
   readonly signOutAvailable: boolean;        // a clearDataKeyFor was injected
-  readonly deleteAccountAvailable: boolean;  // a deletion flow was injected
+  readonly deleteAccountAvailable: boolean;  // a deleteAccountFor was injected
 }
 
 export interface ResolvedRouteTable {
@@ -843,7 +843,34 @@ clearDataKeyFor?: (userId: string) => Promise<void>;
 Optional, and its absence removes the sign-out row entirely
 (`ShellCapabilities.signOutAvailable`, §Q3) — the same discipline
 `pairingRelay` and `backupTransport` already use: a capability that cannot be
-completed is not offered. Rejected alternative: adding `clear()` to
+completed is not offered.
+
+**Where the deletion flow arrives, for the §Q2 ruling.** The same shape, declared
+beside it, so that `deleteAccountAvailable` has a named source rather than an
+implied one:
+
+```ts
+/** Runs account deletion for this identity, to completion. Absent ⇒ the
+ *  Settings row is hidden; `settings/delete` remains a route either way. */
+deleteAccountFor?: (userId: string) => Promise<void>;
+```
+
+**Deliberately opaque, and this is the part worth stating.** It would be natural
+to inject `DeletionCallbacks` (`packages/account/src/types/account.ts:39-47`)
+and let the shell call `deleteAccountFlow` itself — the shell already holds the
+`AccountService`, and could supply `clearLocalState` (it is `clearDataKeyFor`)
+and `onSignedOut` (it is `useSignOut`). It cannot supply the third:
+`reauthenticate` needs the user's password, and **no screen in this repository
+collects one** — `DeleteAccount` asks for a typed confirmation phrase
+(`DeleteAccount.tsx:12-14`), not credentials. The method itself is
+`AuthService.reauthenticate` (`packages/auth/src/types/auth.ts:25`), implemented
+in both services and with no production caller anywhere, so what is missing is
+the screen rather than the capability. Building it is F-06's work, and committing
+to a callback shape here would pre-decide it from the gate that deliberately
+stops short — so the prop stays a single function and the flow is assembled
+where it is understood.
+
+Rejected alternative for both props: adding `clear()` to
 `DataKeyLifecycle`, which would widen a deliberately narrow security interface
 (`docs/ARCHITECTURE.md:465`) and give every holder of a lifecycle the ability to
 destroy a key.
@@ -928,7 +955,7 @@ by walking imports *out from* `PortableCryptoService` and `recoveryCodes`
 | `src/shell/SettingsRoute.tsx` | assembles `SettingsScreen` sections | mount harness |
 | `src/shell/useSignOut.ts` | hook running `signOutPlan` | mount harness |
 | `src/shell/createApp.tsx` | the bootstrap factory (FR-07, NFR-01) | unit (fail-closed) + mount harness |
-| `AppCore` | `clearDataKeyFor?` prop; memo keyed on `[user?.id]` | unit + guard |
+| `AppCore` | `clearDataKeyFor?` and `deleteAccountFor?` props; memo keyed on `[user?.id]` | unit + guard |
 
 **Dependencies**, added to `packages/core/package.json` as **peerDependencies**
 (so exactly one copy exists — React Navigation's context and both native modules
@@ -1197,7 +1224,7 @@ and **9C-5** (`createApp`, for FR-07/NFR-01).
 | **9C-0** | F-07: `AuthProvider` cold start. `packages/auth` only, no shell code. | — | **T** — a failing test reproducing the `null` overwrite, before the fix. |
 | **9C-1** | Pure core: `routes.ts`, `signOutPlan.ts`. No JSX, no dependency. | FR-01, FR-02 | **T** — the full tier-1 suite, red, before either module exists. |
 | **9C-2** | Dependencies: 5 packages into `packages/core` (peer) and all three apps (real). Nothing rendered yet. | NFR-02 | No — verified by `pnpm turbo build test lint` staying green and the lockfile diff. |
-| **9C-3** | `AppShell.tsx`, `SettingsRoute.tsx`, `useSignOut.ts`; `AppCore` gains `clearDataKeyFor` and the fixed memo; the three architecture guards. | FR-04, FR-05, FR-06, NFR-03 | **T** — guards added and shown failing against the current tree before the memo is changed. |
+| **9C-3** | `AppShell.tsx`, `SettingsRoute.tsx`, `useSignOut.ts`; `AppCore` gains `clearDataKeyFor` and `deleteAccountFor` and the fixed memo; the three architecture guards. | FR-04, FR-05, FR-06, NFR-03 | **T** — guards added and shown failing against the current tree before the memo is changed. |
 | **9C-4** | The auth stack: `LoginScreen` → `signup` / `reset` / `verify-device`, replacing the bare `signedOut` element. | FR-03 | **T** — the route table assertions extended before the stack exists. |
 | **9C-5** | `createApp`, with `AppPlatform` injected. No app migrated yet. | FR-07, NFR-01 | **T** — a bootstrap test asserting fail-closed on both `BootstrapFailure` values. |
 | **9C-6** | The tier-2 mount harness and its assertions. | AC-06, AC-03, AC-04 | **T** — by definition. |
@@ -1234,7 +1261,8 @@ versions (`react-native-screens ~4.4.0`, `react-native-safe-area-context
 `AuthGate` and passes after. `AppShell` is rendered only inside
 `EncryptedRepositoryProvider`. No `apps/*/src/screens/**` file imports
 `@react-navigation/*`. `AppCore` with no `clearDataKeyFor` yields
-`signOutAvailable: false`, and the Settings tab then has no sign-out row.
+`signOutAvailable: false`, and with no `deleteAccountFor` yields
+`deleteAccountAvailable: false`; the Settings tab then has neither row.
 
 **9C-4** *(FR-03)* — `signup`, `reset` and `verify-device` are routes in the
 signed-out stack; `LoginScreen`'s `onCreateAccount` and `onForgotPassword` are
@@ -1247,12 +1275,26 @@ and nothing else in both cases; no file under `packages/` imports an Expo module
 (the existing zero-match property, asserted in `check-architecture.mjs` so it
 cannot regress).
 
-**9C-6** *(AC-03, AC-04, AC-06)* — With a lifecycle reporting `locked`, no route
-component is in the rendered tree (FR-05). The gate order is asserted
-structurally. Hardware back from a nested route pops to its parent and does not
-exit. A state change above `AppCore` does not construct a second
+**9C-6** *(AC-03, AC-04, AC-06, and the §Q4 ruling)* — With a lifecycle reporting
+`locked`, no route component is in the rendered tree (FR-05). The gate order is
+asserted structurally. Hardware back from a nested route pops to its parent and
+does not exit. A state change above `AppCore` does not construct a second
 `DataKeyLifecycle` — the memo identity is stable across the re-render. Sign-out
 calls `clearDataKeyFor` before `signOut`, proven by call order.
+
+**Always home, asserted in both halves** — the ruling is two claims and a test
+of one is not a test of the other:
+
+- *The destination.* Navigate away from `home`, drive the lifecycle to `locked`
+  and back to `ready`, and assert the rendered route is the declared `home` —
+  not the route that was showing when the gate closed. An app whose `home` is
+  not `tabs[0]` is used, so a pass cannot come from the navigator's own
+  reset-to-first-route behaviour.
+- *The absence.* Across that same lock cycle, the `SecureStorage` double
+  receives **no `set` call**, and no route name reaches any store. This is the
+  half that encodes the reason: the ruling is not "we chose not to restore" but
+  "nothing about the route is written outside the encrypted boundary", and only
+  this assertion fails if someone later adds a well-meaning cache.
 
 **9C-7/8/9** *(AC-01, AC-02, AC-05, NFR-04)* — Each app builds; each entry file
 is **under 25 lines**, asserted mechanically rather than by eye; existing suites
