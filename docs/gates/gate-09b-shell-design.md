@@ -148,7 +148,7 @@ where they occur rather than only listed here:
 | --- | --- | --- |
 | FR-01 | §Q2 route model; `resolveRouteTable` merges platform and app routes | 9C-1 |
 | FR-02 | §Q3 `AppRouteTable` incl. `home`; §Q9 tier-3 guard that no app screen imports `@react-navigation/*` | 9C-1, 9C-3 |
-| FR-03 | §Q2 Settings tab (4 screens) + auth stack (3 screens) | 9C-4, AC-02 |
+| FR-03 | §Q2 Settings tab (4 screens) + auth stack (3 screens). `DeleteAccount` is a route unconditionally; only its Settings row is capability-gated | 9C-1, 9C-4, AC-02 |
 | FR-04 | §Q1 `native-stack` + `NavigationContainer`; no `BackHandler` code | 9C-6 (AC-03) |
 | FR-05 | §Q4 | 9C-3, 9C-6 |
 | FR-06 | §Q6 F-05; `useSignOut` running `signOutPlan` | 9C-3, 9C-6, AC-05 |
@@ -305,7 +305,31 @@ in at least one app. **Two navigators, never both mounted**, are what it takes:
 | `SettingsScreen` | `settings` (the appended tab) | app shell |
 | `ProfileScreen` | `settings/profile` | app shell |
 | `BackupScreen` | `settings/backup` | app shell |
-| `DeleteAccount` | `settings/delete` | app shell |
+| `DeleteAccount` | `settings/delete` | app shell — route always; **row conditional** |
+
+**Ruling — account deletion: the route exists, the row is hidden.**
+`DeleteAccount` is a route unconditionally, so FR-03 and AC-02 are met: the
+screen is reachable. **The Settings row that reaches it is omitted unless a
+deletion flow is injected** — `deleteAccountAvailable` on `ShellCapabilities`
+(§Q3), making `'delete-account'` conditional in `resolveRouteTable` exactly as
+`backup`, `pair-device` and `sign-out` already are. One rule for capabilities
+the composition did not supply, not four cases and an exception.
+
+*Rejected alternative: ship the row anyway.* A visible, permanently enabled
+"Delete my account" that does nothing is worse than no row. It is the most
+consequential control in the product, a user pressing it has decided something,
+and a button that silently fails there teaches them their data is gone when it
+is not — or that the app is broken at the moment they least want to find out.
+CLAUDE.md rule 28 already refuses to let deletion *imply* more than it does;
+implying it happened at all is the same error, larger. This is the same
+discipline `pairingRelay` and `backupTransport` established: a capability that
+cannot be completed is not offered.
+
+**F-06 closes in its own gate, afterwards.** Wiring `onDelete` to
+`deleteAccountFlow` (`packages/account/README.md:57-63`) is a deliberate piece
+of work with a re-authentication step and a documented deletion order, and it is
+required by no clause of the lock. This gate stops at making the destination
+exist and the row honest about whether it can be reached.
 
 **The auth stack is new to this pass**, and FR-03 is what adds it.
 `SignupScreen` and `PasswordResetScreen` hang off `LoginScreen`'s
@@ -423,9 +447,10 @@ export interface AppRouteTable {
 
 /** What the shell decides, as data — the `dataKeyStep` pattern (§Q9). */
 export interface ShellCapabilities {
-  readonly backupAvailable: boolean;   // a BackupTransport was injected
-  readonly pairingAvailable: boolean;  // a PairingRelay was injected
-  readonly signOutAvailable: boolean;  // a clearDataKeyFor was injected
+  readonly backupAvailable: boolean;         // a BackupTransport was injected
+  readonly pairingAvailable: boolean;        // a PairingRelay was injected
+  readonly signOutAvailable: boolean;        // a clearDataKeyFor was injected
+  readonly deleteAccountAvailable: boolean;  // a deletion flow was injected
 }
 
 export interface ResolvedRouteTable {
@@ -440,7 +465,12 @@ export type SettingsRowId =
   | 'backup' | 'sign-out' | 'delete-account';
 
 /** Pure. Throws `SHELL_ROUTE_TABLE_INVALID` on a duplicate name, an empty tab
- *  list, a `within` naming no tab, or an app trying to declare `Settings`. */
+ *  list, a `within` naming no tab, a `home` naming no tab, or an app trying to
+ *  declare `Settings`.
+ *
+ *  Four `settingsRows` are conditional on a capability and are omitted when it
+ *  is absent: `backup`, `pair-device`, `sign-out` and `delete-account`. The
+ *  routes still exist either way — only the row that reaches them is dropped. */
 export function resolveRouteTable(
   table: AppRouteTable,
   capabilities: ShellCapabilities,
@@ -640,7 +670,27 @@ for free from the placement rather than from link-handling code.
 whenever the gate closes — a passphrase-protected user backgrounding and
 returning loses their route. That is the price of property 3 in §Problem, and it
 is the right price: the alternative is a mounted screen tree over a locked key.
-Route restoration across a lock is listed in [Open questions](#open-questions).
+
+**Ruling — always home.** After an unlock the shell opens on the app's declared
+`home` destination (§Q3). **Route position is not persisted across a locked
+key**, and this is settled rather than deferred.
+
+The reason is where the persisted value would have to live. A route name
+survives a locked key only by being written somewhere the app can read *before*
+the key is opened — which is, by definition, outside the encrypted boundary.
+Every record this platform stores goes through `EncryptingRepository`, and the
+one thing deliberately kept outside it is the wrapped key itself. Adding a
+second exception for a convenience would put a fact about what the user was
+looking at — "assets", "delete account", the name of a detail route — into
+plaintext storage, readable by anything that can reach the device's files. That
+is a small disclosure, but it is a new category of one, bought for a
+scroll-position-sized benefit.
+
+And it is not a trade worth making, because **home is a correct destination.**
+It is where the app opens on a cold start, it is where hardware back returns
+from a tab root (AC-03), and it is a place the user chose to have as their
+first screen. Landing there after an unlock is not a degraded outcome; it is
+the ordinary one.
 
 #### Against FR-05
 
@@ -1107,27 +1157,27 @@ To be made by the documentation gate (9D), not now:
 
 Resolved by the lock, and struck: *the requirement lock* (supplied), *route
 params* (the non-goal "any app's own feature screens" settles it — v1 carries
-none), and *deep linking* (a non-goal). What remains:
+none), and *deep linking* (a non-goal).
 
-1. **Route restoration across a lock.** FR-05's wrapping means a
-   passphrase-protected user returning from the background lands on `home`, not
-   their route (§Q4). FR-05 does not require restoring it, and AC-03 concerns
-   hardware back rather than resumption, so this is genuinely open rather than
-   deferred. Restoring it means persisting a route name across a locked key —
-   cheap, and not obviously right without deciding whether a route name is
-   sensitive.
-2. **`docs/adr/` does not exist in this repository.** The release flow naming it
+**Resolved by product ruling, and struck:**
+
+- ~~**Route restoration across a lock.**~~ **Ruled: always home** (§Q4). After an
+  unlock the shell opens on the declared `home`; route position is not persisted
+  across a locked key, because the persisted value would have to sit outside the
+  encrypted boundary, and home is a correct destination.
+- ~~**F-06 and account deletion.**~~ **Ruled: hide the row** (§Q2).
+  `DeleteAccount` stays a route, so FR-03 holds; the Settings row is omitted
+  unless a deletion flow is injected. Shipping a reachable button with no effect
+  was the rejected alternative. F-06 closes in its own gate afterwards.
+
+What remains:
+
+1. **`docs/adr/` does not exist in this repository.** The release flow naming it
    belongs to a different repo, so the navigator ADR needs a home before 9D can
    write it.
-3. **Concurrent rendering** and the latest-ref pattern (§Q5). Safe in this tree
+2. **Concurrent rendering** and the latest-ref pattern (§Q5). Safe in this tree
    today; revisit if a concurrent feature is ever enabled.
-4. **F-06 and account deletion.** `deleteAccountFlow` still has no caller
-   (`packages/account/README.md:57-63`). FR-03 makes `DeleteAccount` *reachable*,
-   which is what the lock asks; wiring `onDelete` to the flow is not required by
-   any clause and is not in scope. **This gate creates the place where the gap
-   becomes visible**, and it should be closed deliberately rather than by
-   whoever notices the button does nothing.
-5. **AC-05's cold start, in test.** The criterion says "verified after a cold
+3. **AC-05's cold start, in test.** The criterion says "verified after a cold
    start". §Q9 satisfies it at the custody level — clear, construct a fresh
    `KeyCustody` over the same storage, assert `absent` — which is a new process's
    view of the store without being a new process. Whether that reading is
@@ -1164,10 +1214,15 @@ can overwrite a user delivered by `onAuthStateChanged`; it passes after; no othe
 
 **9C-1** *(FR-01, FR-02)* — `resolveRouteTable` appends `Settings` in every case;
 rejects an app declaring `Settings`, a duplicate name, an empty tab list, a
-dangling `within` and a `home` naming no tab; defaults `home` to the first tab;
-omits `backup`, `pair-device` and `sign-out` when the capability is absent.
-`signOutPlan` orders the clear strictly before the sign-out and refuses an empty
-identity. Zero new dependencies in this gate.
+dangling `within` and a `home` naming no tab; defaults `home` to the first tab.
+**All four conditional rows are covered, each in both directions:** `backup`,
+`pair-device`, `sign-out` and `delete-account` are present when their capability
+is true and omitted when it is false, asserted one capability at a time so a row
+cannot be gated on the wrong flag. **`settings/delete` is in `details` whichever
+way `deleteAccountAvailable` falls** — the ruling in §Q2 is that the row is
+hidden, not the route, and a test that only checked the row would pass if the
+route disappeared with it. `signOutPlan` orders the clear strictly before the
+sign-out and refuses an empty identity. Zero new dependencies in this gate.
 
 **9C-2** *(NFR-02)* — `pnpm turbo build test lint` green, which includes the
 portable-path guard; `pnpm-lock.yaml` shows the five packages at the Expo-pinned
@@ -1225,10 +1280,11 @@ first pass are struck**, because the lock puts them in scope.
    the platform hands it one, which is a consequence of §Q4 rather than a feature.
 3. **Web.** A non-goal, and fact 2. `react-native-web` appears only in the tier-2
    test harness, never as a shipping target.
-4. **Route restoration across a lock** (open question 1).
-5. **Wiring `deleteAccountFlow`.** `DeleteAccount` becomes *reachable*, which is
-   what FR-03 requires; connecting `onDelete` to the flow is required by no
-   clause (open question 4).
+4. **Route restoration across a lock.** Ruled, not deferred: always home (§Q4).
+5. **Wiring `deleteAccountFlow`.** `DeleteAccount` is *reachable*, which is what
+   FR-03 requires; connecting `onDelete` to the flow is required by no clause and
+   closes in its own gate. Until it is injected the Settings row is hidden rather
+   than inert (§Q2).
 6. **F-09's fix.** Deferred with a guard (§Q6).
 7. ~~**`SignupScreen`, `PasswordResetScreen`, `DeviceVerification`.**~~ **Struck.**
    FR-03 and AC-02 put all seven screens in scope; they become the auth stack
