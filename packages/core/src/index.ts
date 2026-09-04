@@ -17,6 +17,20 @@ export {
   type DataKeyGateLabels,
 } from './DataKeyGate';
 export { dataKeyStep, type DataKeyStep } from './dataKeyStep';
+export {
+  resolveRouteTable,
+  SETTINGS_TAB,
+  SETTINGS_PROFILE,
+  SETTINGS_BACKUP,
+  SETTINGS_DELETE,
+  type AppDestination,
+  type AppDetailDestination,
+  type AppRouteTable,
+  type ShellCapabilities,
+  type ResolvedRouteTable,
+  type SettingsRowId,
+} from './routes';
+export { signOutPlan, type SignOutPlan, type SignOutStep } from './signOutPlan';
 export { repositoryForConsumer, isEncryptedRepository } from './repositoryAccess';
 export {
   pairingStep,
