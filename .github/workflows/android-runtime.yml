@@ -12,30 +12,38 @@ name: X-1 Android runtime
 # shipped default, the engine must be Hermes or the job fails, and the five
 # browser globals are deleted before the security package is even imported.
 
+# When this runs, and why it is not on every commit.
+#
+# A pull request is opened when a gate is finished and ready to merge, so that
+# is the automatic run. Mid-gate, a run happens when someone decides it is worth
+# one — `workflow_dispatch`, on any branch. Nothing runs per commit.
+#
+# There is deliberately no `push` trigger. A pull request tests the same head
+# that would be merged, so re-running on push to `main` re-proves a result that
+# is already in hand and delays nothing that was going to fail. It was costing a
+# second emulator pair per merge for no new information.
+#
+# `paths-ignore` rather than a `paths` allow-list, and not only because GitHub
+# rejects both on one event. The allow-list named `packages/**`, `apps/**` and
+# six specific files — and omitted `package.json`, `turbo.json` and
+# `tsconfig.base.json`, any of which can change what the runtime does. An
+# allow-list is wrong by staying silent; an ignore list is wrong by running
+# something it did not need to. This job is the last line before a Hermes
+# divergence reaches a phone, so it should be wrong in the direction that
+# still runs.
+#
+# Documentation is the exception because it is provably inert here: markdown
+# reaches no compiler, no bundler and no engine, so it cannot fail lint, the
+# architecture guard, or the self-test on the device. A documentation-only gate
+# runs nothing, deliberately — `paths-ignore` skips only when *every* changed
+# file matches, so a commit touching one source file still runs in full.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/**'
-      - 'apps/**'
-      - 'tools/x1-selftest/**'
-      - '.github/workflows/android-runtime.yml'
-      - 'scripts/check-architecture.mjs'
-      - 'eslint.config.mjs'
-      - 'firestore.rules'
-      - 'storage.rules'
-      - 'pnpm-lock.yaml'
   pull_request:
-    paths:
-      - 'packages/**'
-      - 'apps/**'
-      - 'tools/x1-selftest/**'
-      - '.github/workflows/android-runtime.yml'
-      - 'scripts/check-architecture.mjs'
-      - 'eslint.config.mjs'
-      - 'firestore.rules'
-      - 'storage.rules'
-      - 'pnpm-lock.yaml'
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.gitattributes'
   workflow_dispatch:
 
 concurrency:
