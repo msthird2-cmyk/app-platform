@@ -9,6 +9,7 @@ export {
   validateCredentials,
 } from './credentials';
 export { AuthProvider, useAuth, type AuthProviderProps, type AuthContextValue } from './AuthProvider';
+export { observeAuthSession, type AuthSessionSink } from './authSession';
 export { InMemoryAuthService, type InMemoryAuthOptions } from './services/InMemoryAuthService';
 export { LoginScreen, type LoginScreenProps } from './components/LoginScreen';
 export { SignupScreen, type SignupScreenProps } from './components/SignupScreen';

@@ -1,8 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { createLogger } from '@platform/utils';
+import { observeAuthSession } from './authSession';
 import type { AuthService, AuthUser, Credentials } from './types/auth';
-
-const log = createLogger({ scope: 'auth' });
 
 export interface AuthContextValue {
   user: AuthUser | null;
@@ -24,28 +22,7 @@ export function AuthProvider({ service, children }: AuthProviderProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [initializing, setInitializing] = useState(true);
 
-  useEffect(() => {
-    let active = true;
-    const unsubscribe = service.onAuthStateChanged((next) => {
-      if (!active) return;
-      setUser(next);
-      setInitializing(false);
-    });
-    void service
-      .getCurrentUser()
-      .then((current) => {
-        if (!active) return;
-        setUser(current);
-      })
-      .catch(() => log.warn('current user lookup failed'))
-      .finally(() => {
-        if (active) setInitializing(false);
-      });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [service]);
+  useEffect(() => observeAuthSession(service, { setUser, setInitializing }), [service]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

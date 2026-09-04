@@ -33,5 +33,17 @@ export interface AuthService {
    */
   sendDeviceVerification(deviceId: string): Promise<void>;
   confirmDeviceVerification(deviceId: string, code: string): Promise<void>;
+  /**
+   * Subscribes to the signed-in identity, and **must invoke `listener` with the
+   * current state once, promptly, after subscribing** — including with `null`
+   * when nobody is signed in.
+   *
+   * Stated because callers depend on it rather than merely benefit from it:
+   * this is the only signal that initialisation has finished, so an
+   * implementation that stays silent until something changes leaves an
+   * application waiting forever. Both implementations here satisfy it —
+   * `InMemoryAuthService` calls the listener directly on subscribe, and
+   * Firebase's SDK delivers the initial state once persistence is restored.
+   */
   onAuthStateChanged(listener: (user: AuthUser | null) => void): () => void;
 }
