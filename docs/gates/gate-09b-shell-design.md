@@ -9,31 +9,26 @@ function bodies and no patches.
 
 ## Status
 
-**`GATE 9B RESULT: BLOCKED`** — on one missing input, not on a design problem.
+**`GATE 9B RESULT: READY FOR IMPLEMENTATION`**
 
-The design is complete and is recorded in full below. Nine of the nine required
-decisions are made, with rejected alternatives. What blocks the gate is that
-**the requirement lock the brief calls "settled input" was not supplied and does
-not exist in this repository.** Three of the ten questions are stated in terms of
-it, and cannot be answered without inventing it:
+The first pass of this gate was BLOCKED on a missing input: the requirement lock
+it was asked to justify against did not exist in the repository, on any branch,
+or in any blob in the history, and inventing FR/AC text would have been resolving
+a contradiction the brief said to report. **The lock has since been supplied and
+is recorded verbatim below.** Q2, Q4 and Q10 are now answered against it, and
+nothing else blocks.
 
-- Q2 asks the route model to be justified "against FR-03 and AC-03".
-- Q4 says gate placement "decides FR-05".
-- Q10 asks "which locked requirements cannot be met by this design".
-
-Searched: every `.md` in the working tree (15 files), every branch (21 local, 19
-remote), and the full commit history. The tokens `FR-`, `AC-` and the phrase
-"requirement lock" appear nowhere. The brief's instruction is *"Report a
-contradiction rather than resolving it"*, and manufacturing plausible FR/AC text
-in order to satisfy the questions would be resolving it.
-
-**To unblock:** supply the requirement-lock text (FR-* and AC-* clauses). The
-design below does not change; §Q2, §Q4 and §Q10 gain their justifications, and
-the final line flips.
-
-Nothing else blocks. In particular, **no rule in CLAUDE.md or
-`docs/ARCHITECTURE.md` has to change** for this design — see
+All ten questions are answered and all nine required decisions are made, with
+rejected alternatives. **No locked requirement is unmet** (§Q10), and **no rule
+in CLAUDE.md or `docs/ARCHITECTURE.md` has to change** — see
 [Rules this design lives inside](#rules-this-design-lives-inside).
+
+One requirement is met with a caveat that is recorded rather than passed over:
+FR-03/AC-02's seventh screen, `DeviceVerification`, is reachable by navigation in
+every app and functional only against an auth service that implements it — which
+`InMemoryAuthService` does and `FirebaseAuthService` deliberately does not
+(§Q2). Every other requirement is met without qualification; NFR-01's 25-line
+entry file comes out at 21 (§Q3).
 
 ---
 
@@ -81,6 +76,88 @@ previous gates made structural:
    (`DataKeyGate.tsx:194,213,215,225,253,274,280`).
 4. Custody is addressed per identity and the address is derived, never stored
    (`custodyAddress.ts:46-54`).
+
+---
+
+## Requirement lock — application shell
+
+Supplied after the first pass of this gate, and reproduced verbatim. This is the
+settled input the decisions below are justified against.
+
+> **Problem:** an app must copy ~110 lines of composition to run; seven built
+> platform screens are unreachable; there is no navigation of any kind; three
+> unbuilt apps would each copy it again.
+>
+> **Goal:** a new app declares its name, collections and screens; the platform
+> supplies everything else.
+>
+> **Workflow:** launch → login or resume → unlock → app home. Platform
+> destinations — settings, profile, backup, pairing, delete account — reachable
+> from anywhere. Back and the Android hardware back button behave consistently.
+>
+> * **FR-01** The shell owns one route table merging platform routes with
+>   app-declared routes.
+> * **FR-02** An app declares its routes and home; it writes no navigation code.
+> * **FR-03** All seven currently-unreachable platform screens are reachable.
+> * **FR-04** Back and Android hardware back are handled by the shell.
+> * **FR-05** The key gate wraps the navigator. While the key is locked, no route
+>   mounts. Once unlocked, every route is reachable without a further prompt for
+>   the rest of the session.
+> * **FR-06** Sign-out is reachable and clears custody for the signed-in identity.
+> * **FR-07** A single factory replaces per-app composition boilerplate.
+> * **NFR-01** A new app's entry file is under 25 lines.
+> * **NFR-02** Dependency direction and the portable-path guard hold; no
+>   navigation dependency reaches `packages/security`.
+> * **NFR-03** App-level state must not rebuild the data-key lifecycle.
+> * **NFR-04** Existing apps keep working; Net Worth's persistence is untouched.
+> * **AC-01** Net Worth, Expense and Investment run on the shell; each entry file
+>   under 25 lines.
+> * **AC-02** Every platform screen reachable by navigation in at least one app.
+> * **AC-03** Hardware back from a nested route returns to the parent, not out of
+>   the app.
+> * **AC-04** App state changes do not reset an unlocked key.
+> * **AC-05** Sign-out leaves no custody record for that identity, verified after
+>   a cold start.
+> * **AC-06** Components render under test; the shell is not untested.
+>
+> **Non-goals:** deep linking, push notifications, per-app theming, the platform
+> message-map gap, web parity, and any app's own feature screens.
+
+### What the lock changed in this design
+
+The first pass was written without it. Four things moved, and they are marked
+where they occur rather than only listed here:
+
+1. **FR-03 and AC-02 put all seven screens in scope.** The first pass excluded
+   `SignupScreen`, `PasswordResetScreen` and `DeviceVerification` as a
+   signed-out concern, and kept `BackupScreen` superseded. Both exclusions are
+   withdrawn (§Q2, and Scope exclusions 7 and 9 are struck).
+2. **FR-07 and NFR-01 add a second factory.** `createAppShell` builds the shell;
+   they require something larger — a factory that absorbs the entry point's
+   bootstrap as well. `createApp` is added (§Q3, §Q7, gate 9C-5).
+3. **The non-goals settle two open questions.** "Any app's own feature screens"
+   removes the pressure for route params, and "deep linking" retires the
+   link-handling question. Both are now positively justified rather than
+   deferred.
+4. **AC-06 makes the mount harness mandatory** rather than the thinner of two
+   options (§Q9).
+
+### Traceability
+
+| Req | Met by | Verified by |
+| --- | --- | --- |
+| FR-01 | §Q2 route model; `resolveRouteTable` merges platform and app routes | 9C-1 |
+| FR-02 | §Q3 `AppRouteTable` incl. `home`; §Q9 tier-3 guard that no app screen imports `@react-navigation/*` | 9C-1, 9C-3 |
+| FR-03 | §Q2 Settings tab (4 screens) + auth stack (3 screens) | 9C-4, AC-02 |
+| FR-04 | §Q1 `native-stack` + `NavigationContainer`; no `BackHandler` code | 9C-6 (AC-03) |
+| FR-05 | §Q4 | 9C-3, 9C-6 |
+| FR-06 | §Q6 F-05; `useSignOut` running `signOutPlan` | 9C-3, 9C-6, AC-05 |
+| FR-07 | §Q3 `createApp` | 9C-5 |
+| NFR-01 | §Q3 `createApp`, platform modules injected — measured at 21 lines | 9C-7/8/9 (AC-01) |
+| NFR-02 | §Q7 boundary: `security` imports only `utils`; the portable-path guard walks out from `security` | 9C-2, `pnpm lint` |
+| NFR-03 | §Q5 memo keyed on `[user?.id]`; constructions absorbed by `createApp` | 9C-3, 9C-6 (AC-04) |
+| NFR-04 | §Q8 additive migration; Net Worth's persistence in no diff | 9C-7/8/9 |
+| AC-06 | §Q9 tier-2 mount harness | 9C-6 |
 
 ---
 
@@ -144,7 +221,7 @@ review.
 
 ---
 
-## The nine decisions
+## The ten questions, and the nine decisions
 
 ### Q1 — Navigator: `@react-navigation/native`, with `native-stack` and `bottom-tabs`
 
@@ -212,17 +289,96 @@ verified); it is not installed and is not needed.
 **Where the app's set attaches:** at the tab list, and nowhere else. An app
 cannot add a route to Settings, cannot reorder Settings, and cannot add a modal
 that the shell does not know about. One direction of extension, so there is one
-place to audit.
+place to audit — which is FR-01's "one route table" and FR-02's "writes no
+navigation code" expressed as a shape rather than a convention.
 
-> **Cannot be justified against FR-03 and AC-03** — those clauses were not
-> supplied. The justification above is against fact 4 and 9A Q3 only.
+#### Against FR-03 and AC-02 — where each of the seven screens lands
+
+FR-03 requires all seven reachable; AC-02 requires each reachable by navigation
+in at least one app. **Two navigators, never both mounted**, are what it takes:
+
+| Screen | Route | Navigator |
+| --- | --- | --- |
+| `SignupScreen` | `signup` | auth stack |
+| `PasswordResetScreen` | `reset` | auth stack |
+| `DeviceVerification` | `verify-device` | auth stack, and a Settings row |
+| `SettingsScreen` | `settings` (the appended tab) | app shell |
+| `ProfileScreen` | `settings/profile` | app shell |
+| `BackupScreen` | `settings/backup` | app shell |
+| `DeleteAccount` | `settings/delete` | app shell |
+
+**The auth stack is new to this pass**, and FR-03 is what adds it.
+`SignupScreen` and `PasswordResetScreen` hang off `LoginScreen`'s
+`onCreateAccount` and `onForgotPassword`, which are `() => undefined` in all
+three apps (9A Q3). A stub is not reachability, so the signed-out branch gets a
+navigator of its own: a native-stack rooted at `LoginScreen`, rendered as
+`AppCore`'s `signedOut`, replacing the bare `<LoginScreen …/>` each app passes
+today.
+
+**This does not weaken FR-05.** The auth stack sits in `AuthGate`'s
+`!user → signedOut` branch (`AppCore.tsx:109`), which returns *before*
+`DataKeyGate` and *before* `EncryptedRepositoryProvider`. There is no key and no
+encrypting repository in that subtree — and it fails closed if one is ever
+reached for: `useRepository()` there resolves the raw repository and throws
+`REPOSITORY_NOT_ENCRYPTING` (`repositoryAccess.ts:21-23`). FR-05's "the key gate
+wraps the navigator" is about the application navigator, and it does.
+
+**`BackupScreen` is reinstated, and the repository predicted it.**
+`BackupControls.tsx:19-21` records that it is *deliberately* not `BackupScreen`
+because that component "wraps itself in a `Screen`, which belongs to an
+application with navigation to route to it". This gate supplies the navigation,
+so the stated condition is met: `BackupScreen` becomes the `settings/backup`
+route. `BackupControls` stays exported for a host with no navigation, and its
+comment becomes a description of the alternative rather than of an absence.
+
+**`DeviceVerification` — reachable everywhere, functional where the service
+implements it.** It is a `settings/verify-device` row and an auth-stack route, so
+it is navigable unconditionally. Its action then depends on the injected service,
+and the two implementations differ by design, not by defect:
+`InMemoryAuthService.confirmDeviceVerification` (`packages/auth/src/services/InMemoryAuthService.ts:116-119`) works, so the screen
+is functional end-to-end in every preview composition — which is what AC-02's "in
+at least one app" asks for. `FirebaseAuthService` throws
+`DEVICE_VERIFICATION_UNAVAILABLE` (`packages/firebase/src/services/FirebaseAuthService.ts:132-134`),
+which is the documented fail-closed contract of the interface itself
+(`packages/auth/src/types/auth.ts:28-33`: an implementation without a trusted
+server *must* fail closed). Recorded plainly: **against Firebase this screen is
+reachable but cannot succeed**, and closing that needs a trusted server, which
+Firebase Spark rules out (CLAUDE.md rule 21). It is not this gate's to close.
+
+#### Against FR-04 and AC-03 — hardware back
+
+AC-03 requires hardware back from a nested route to return to the parent rather
+than exiting. The route model delivers this structurally rather than with a
+handler:
+
+- **A nested route inside a tab is a native-stack push.** `native-stack` maps
+  Android's back gesture and hardware button onto a stack pop through
+  `react-native-screens`. Back from `settings/profile` returns to `settings`.
+- **From a tab root, `bottom-tabs`' default `backBehavior: 'firstRoute'` returns
+  to the first tab** — the app's declared `home` (§Q3) — rather than exiting.
+- **From `home` with an empty stack, back exits.** That is the correct terminal
+  behaviour and is what AC-03's "not out of the app" excludes only for a *nested*
+  route.
+- **The shell writes no `BackHandler` code**, which is FR-04's "handled by the
+  shell": the shell owns the navigator, and the navigator owns back. An app
+  registering its own handler would be app navigation code, which the §Q9 tier-3
+  guard forbids.
+
+**The gate steps are deliberately outside this.** `DataKeyGate`'s steps are not
+routes (§Q4), so hardware back at the unlock screen exits the app. That is the
+consequence of FR-05, and it is the right one: there is nowhere behind an unlock
+screen to go back to, and a back that dismissed it would be a way past the gate.
 
 **Rejected alternatives.** A single stack with no tabs (cheapest, but Settings
 then has to be reachable from every screen's header, which is a per-screen
-obligation the shell cannot enforce). Tabs with no stacks (cannot express a
-detail view; fact 4 fails). Settings as a modal rather than a tab (works, and
-was close — rejected because a modal has no stable back-stack, and account
-deletion and passphrase change are flows a user may need to leave and return to).
+obligation the shell cannot enforce, and the lock's "reachable from anywhere"
+would become a convention). Tabs with no stacks (no push, so AC-03 has nothing
+to pop and fact 4's detail views cannot exist). Settings as a modal rather than
+a tab (works, and was close — rejected because a modal has no stable back-stack,
+so AC-03 inside Settings would depend on the modal's own dismissal semantics,
+and account deletion and passphrase change are flows a user may need to leave
+and return to). Signup and reset as modals over `LoginScreen` (fewer moving
+parts than an auth stack, rejected for the same AC-03 reason).
 
 ### Q3 — The app-declaration contract
 
@@ -254,6 +410,11 @@ export interface AppRouteTable {
   /** At least one. The order is the tab order; `Settings` is appended by the
    *  shell and may not appear here. */
   readonly tabs: readonly [AppDestination, ...AppDestination[]];
+  /** FR-02's "and home": names the tab the app opens on, and the tab hardware
+   *  back returns to (AC-03). Must name a member of `tabs`; defaults to the
+   *  first. Explicit rather than positional so that reordering the tabs does
+   *  not silently move the home destination. */
+  readonly home?: string;
   readonly details?: readonly AppDetailDestination[];
   readonly modals?: readonly AppDestination[];
   /** Extra rows for the Settings tab, below the platform's own. */
@@ -321,6 +482,130 @@ the table before render). Routes as React children (`<Route …/>` elements) —
 table then cannot be inspected without rendering, which forfeits the entire
 pure-function test strategy of §Q9.
 
+
+#### `createApp` — the factory FR-07 and NFR-01 require
+
+`createAppShell` above builds the shell. FR-07 asks for "a single factory
+[that] replaces per-app composition boilerplate" and NFR-01 caps a new app's
+entry file at 25 lines, which is a larger job: today Expense needs 113 lines of
+`App.tsx` and 105 of `index.tsx` before a domain rule exists (9A Q1). So a
+second, outer factory absorbs the entry point's bootstrap.
+
+```ts
+// packages/core/src/shell/createApp.tsx
+
+/** The platform modules the bootstrap needs. Injected, never imported by this
+ *  package — see the constraint below. */
+export interface AppPlatform {
+  /** `expo-secure-store`, as a module namespace. */
+  readonly secureStore: SecureStoreModule;
+  /** Keychain namespace. Distinct per app, as today. */
+  readonly keychainService: string;
+  readonly randomBytes: RandomBytes;
+}
+
+export interface AppDefinition {
+  readonly appName: string;
+  readonly collections: readonly string[];
+  readonly routes: AppRouteTable;
+  readonly platform: AppPlatform;
+  /** Backend-dependent services. Resolved once, at bootstrap. Rejecting means
+   *  the app does not start — there is no preview fallback. */
+  readonly services: () => Promise<PlatformServices> | PlatformServices;
+  readonly backupTransport?: BackupTransport;
+  /** Copy for a bootstrap that failed closed. A default is supplied. */
+  readonly unavailable?: (reason: BootstrapFailure) => ReactNode;
+}
+
+export type BootstrapFailure = 'secure-storage' | 'services';
+
+/** The root component. Pass straight to `registerRootComponent`. */
+export function createApp(definition: AppDefinition): ComponentType;
+```
+
+**What it absorbs**, all of it identical across the three apps today (9A Q2
+measured zero platform-logic differences between Expense and Investment):
+`buildCustodyStorage()` and its browser/native branch; the fail-closed bootstrap
+state machine and its "cannot start" rendering; `createCryptoService`;
+`createRecordCipher`; `dataKeyLifecycleFor`; `clearDataKeyFor` (§Q6); the
+`AppCore` element; and the signed-out auth stack (§Q2).
+
+**What stays with the app:** its name, its collections, its keychain namespace,
+its routes, and a `services` resolver — which is the only thing permitted to
+name a backend, and stays in `src/composition/**` where the ESLint rule and
+`check-architecture.mjs` already require it.
+
+**The hard constraint, and why the platform modules are parameters.** No file
+under `packages/` imports an Expo module today — verified: zero matches for
+`from 'expo…'` or `registerRootComponent` across every `packages/*/src`. That is
+deliberate and stated at `apps/expense/index.tsx:31-32`: *"Secure storage is
+chosen here, at the composition root, and injected — the shared packages never
+reach for a platform module themselves."* A `createApp` that imported
+`expo-secure-store` would make `packages/core` Expo-only and break the property
+that every shared package is testable and portable. So `AppPlatform` is a
+parameter, the entry file imports the modules, and `registerRootComponent` stays
+in the app.
+
+**Measured against NFR-01.** Net Worth is the worst case, because it is the only
+app with a backup transport and a backend selection:
+
+```tsx
+import { registerRootComponent } from 'expo';                    //  1
+import * as SecureStore from 'expo-secure-store';                //  2
+import { getRandomBytes } from 'expo-crypto';                    //  3
+import { createApp } from '@platform/core';                      //  4
+import { COLLECTIONS } from './src/collections';                 //  5
+import { ROUTES } from './src/routes';                           //  6
+import { resolveServices } from './src/composition/services';    //  7
+                                                                 //  8
+registerRootComponent(                                           //  9
+  createApp({                                                    // 10
+    appName: 'Net Worth',                                        // 11
+    collections: COLLECTIONS,                                    // 12
+    routes: ROUTES,                                              // 13
+    platform: {                                                  // 14
+      secureStore: SecureStore,                                  // 15
+      randomBytes: getRandomBytes,                               // 16
+      keychainService: 'networth',                               // 17
+    },                                                           // 18
+    services: resolveServices,                                   // 19
+  }),                                                            // 20
+);                                                               // 21
+```
+
+**21 lines**, against NFR-01's cap of 25. Expense and Investment come out at 21
+too — they differ only in the app name, the collections and the keychain
+namespace, which is 9A Q2's finding restated as a file. **The `backupTransport`
+parameter is deliberately not used here.** Passing it in the entry file was the
+first draft and came to exactly 25 lines, which fails a cap written as *under*
+25; folding the transport into `resolveServices` instead costs nothing, because
+Net Worth already merges it into the services object at
+`apps/networth/index.tsx:150` (`setServices({ ...composed, backupTransport })`).
+The parameter stays on `AppDefinition` for an app that wants the transport
+visible at its root, but no app uses it.
+
+**What moves out of `apps/networth/index.tsx` to make this fit:**
+`readEnvironment()` (`:49-60`), the `selectBackend` / `misconfigurationMessage`
+branch (`:132-136`), the two composition calls (`:145-146`) and the transport
+construction (`:118-122`) all move behind `resolveServices` in
+`src/composition/services.ts`. That is app composition moving into the app's
+composition module — the layer CLAUDE.md already designates as the only place
+permitted to name a backend — not logic moving into a package. **NFR-04 is
+satisfied by exactly this**: `src/data/`, the Firestore document shapes and
+`firestore.rules` are untouched, and `createProductionServices` keeps its
+current body.
+
+**Rejected alternatives.** `createApp` importing the Expo modules directly
+(fewest lines in the entry file, and rejected on the boundary above — it would
+also make every `packages/core` test require an Expo runtime, which would take
+AC-06's harness from difficult to impossible). One factory instead of two —
+`createApp` returning the shell as well (rejected because `createAppShell`'s
+table validation must run at module scope, before React, and `createApp`'s
+bootstrap is inherently async; folding them hides a synchronous validation
+inside an async boot). Codegen or a template CLI (does not satisfy FR-07's
+"single factory", and generated boilerplate is still boilerplate — it just stops
+being reviewed).
+
 ### Q4 — Gate placement: **the gates wrap the navigator**
 
 `AuthGate` → `DataKeyGate` → `EncryptedRepositoryProvider` → `AppShell`. Auth and
@@ -357,8 +642,32 @@ returning loses their route. That is the price of property 3 in §Problem, and i
 is the right price: the alternative is a mounted screen tree over a locked key.
 Route restoration across a lock is listed in [Open questions](#open-questions).
 
-> **This is stated to decide FR-05, which was not supplied.** The reasoning above
-> stands on hard rule 14 and on the tree as it exists.
+#### Against FR-05
+
+FR-05 is written as wrapping rather than routing, which is the placement decided
+above. Its three clauses map onto the tree exactly:
+
+| FR-05 clause | Where it holds |
+| --- | --- |
+| "The key gate wraps the navigator" | `DataKeyGate` → `EncryptedRepositoryProvider` → `AppShell` (§Target architecture) |
+| "While the key is locked, no route mounts" | `DataKeyGate` returns at `:253` for `unlock` and never reaches `children`; `AppShell` is `children` |
+| "Once unlocked, every route is reachable without a further prompt for the rest of the session" | `opened` lives in the lifecycle closure (`dataKeyLifecycle.ts:198`) and survives for as long as that object does — which is what NFR-03 and §Q5 exist to guarantee |
+
+**The reason it is wrapping rather than routing, recorded under FR-05 as
+required.** Hard rule 14 forbids relying on navigation restrictions for security,
+and the failure it is guarding against is concrete here rather than theoretical:
+**a redirect-based gate mounts every screen while the key is locked.** The
+navigator exists, so route components mount and their effects run;
+`useRepository()` resolves, because `EncryptedRepositoryProvider` is in context
+above the navigator; and an effect firing a read before the redirect lands calls
+`lifecycle.load()`, which throws `DATA_KEY_LOCKED`. The user gets a crash or a
+swallowed error at the moment they should be getting an unlock prompt. Wrapping
+means the screen component does not exist, so there is no effect to fire.
+
+Note that FR-05's third clause and NFR-03 are the same requirement approached
+from two directions: a rebuilt lifecycle has `opened === null`, which is exactly
+"a further prompt in the same session". §Q5 is therefore load-bearing for FR-05,
+not only for AC-04.
 
 **Rejected alternatives.** Gates as routes with a `beforeRemove`/redirect guard
 (reasons 1–3). A hybrid — auth as a route, unlock as a wrapper (splits one
@@ -548,7 +857,15 @@ root and shared providers"*; the shell is a provider around the composition
 root's children. `core` may already import any shared package
 (`docs/ARCHITECTURE.md:31`), which the Settings tab needs — it mounts screens
 from `auth`, `account` and `backup` at once, and **no other package is permitted
-to import all three.** That alone rules out putting it anywhere else.
+to import all three.** That alone rules out putting it anywhere else, and FR-03
+sharpens it: the auth stack adds `auth`'s three screens to the same requirement.
+
+**NFR-02 is satisfied by this placement, not despite it.** `security` may import
+only `utils` (`docs/ARCHITECTURE.md:24`), so no navigation dependency can reach
+it by any path ESLint permits; and the portable-path guard computes its file set
+by walking imports *out from* `PortableCryptoService` and `recoveryCodes`
+(`check-architecture.mjs:97-153`), so a dependency added to `core` — which
+`security` does not import — cannot enter that set.
 
 **What `core` gains:**
 
@@ -557,8 +874,10 @@ to import all three.** That alone rules out putting it anywhere else.
 | `src/shell/routes.ts` | types + `resolveRouteTable` (pure) | unit, no harness |
 | `src/shell/signOutPlan.ts` | pure ordered plan | unit, no harness |
 | `src/shell/AppShell.tsx` | `NavigationContainer`, tabs, stacks | mount harness |
+| `src/shell/AuthStack.tsx` | signed-out stack: login → signup / reset / verify-device (FR-03) | mount harness |
 | `src/shell/SettingsRoute.tsx` | assembles `SettingsScreen` sections | mount harness |
 | `src/shell/useSignOut.ts` | hook running `signOutPlan` | mount harness |
+| `src/shell/createApp.tsx` | the bootstrap factory (FR-07, NFR-01) | unit (fail-closed) + mount harness |
 | `AppCore` | `clearDataKeyFor?` prop; memo keyed on `[user?.id]` | unit + guard |
 
 **Dependencies**, added to `packages/core/package.json` as **peerDependencies**
@@ -580,18 +899,26 @@ a second navigator shape (a drawer, or a web router) landing beside this one.
 
 The distinction is the decision, and it is forced by how bundling works:
 `packages/core/src/index.ts` re-exports everything, so **every app pulls
-`AppShell` into its bundle the moment it exists**, whether or not it renders it.
-The five packages of §Q7 therefore land in all three apps in one commit. There is
-no arrangement in which only the migrated app needs them.
+`AppShell` and `createApp` into its bundle the moment they exist**, whether or
+not it renders them. The five packages of §Q7 therefore land in all three apps in
+one commit. There is no arrangement in which only the migrated app needs them.
 
-**The migration itself is additive and therefore staged.** `AppCore`'s `children`
-stays `ReactNode`. An app passing a screen keeps working exactly as today; an app
-passing `<AppShell routes={…}/>` gets navigation. No signature changes, so
-CLAUDE.md rule 12 (breaking changes update all apps in one change) is not
-triggered — by design, because triggering it would force all three apps to
+**The migration itself is additive and therefore staged.** `AppCore`'s
+`children` stays `ReactNode` and `createApp` is a new export beside it, not a
+replacement for anything. An app passing a screen keeps working exactly as today;
+an app whose entry file calls `createApp` gets the shell. No existing signature
+changes, so CLAUDE.md rule 12 (breaking changes update all apps in one change) is
+not triggered — by design, because triggering it would force all three apps to
 migrate in a single commit and make the first shell change the largest one.
 
-Order: **Expense → Investment → Net Worth.** Expense first because it is the
+**This is what NFR-04 asks for**, and it is worth being precise about what "keep
+working" means: each app's `App.tsx` is *absorbed* by `createApp` rather than
+edited in place, so at any commit an app is either fully on the old path or
+fully on the new one, never half-migrated. Net Worth's persistence is untouched
+throughout — `src/data/`, the document shapes and `firestore.rules` appear in no
+diff in this sequence.
+
+Order: **Expense (9C-7) → Investment (9C-8) → Net Worth (9C-9).** Expense first because it is the
 smallest (`App.tsx` 113 lines, one screen) and because Expense and Investment
 differ by 23 lines of which zero are platform logic (9A Q2) — so Investment's
 migration is a near-copy of a reviewed one. Net Worth last because it is the only
@@ -600,7 +927,9 @@ multi-screen (fact 4), so it is where the route model gets its real test.
 
 **What breaks:**
 
-- Nothing in `apps/*` at migration time, by the additive design above.
+- Nothing in `apps/*` at migration time, by the additive design above. Each
+  app's old `App.tsx` is deleted in its own migration commit, once its entry file
+  calls `createApp`.
 - **`apps/networth/tests/backupWiring.test.ts` will need updating.** It asserts
   wiring by reading source text (9A Q9); moving backup into the Settings tab
   changes the text it reads. This is the one existing test the migration
@@ -609,8 +938,10 @@ multi-screen (fact 4), so it is where the route model gets its real test.
   are autolinked.
 - **The Hermes CI job is unaffected and that is a gap**, not a relief: it builds
   `tools/x1-selftest` (fact 8), so `react-native-screens` will not be exercised
-  on a real device by anything in CI. Listed as a risk and as an acceptance
-  criterion for 9C-4.
+  on a real device by anything in CI. The tier-2 harness renders through
+  `react-native-web`, so it does not close the gap either. Nothing in the lock
+  requires closing it — AC-06 asks that components render under test, not on a
+  device — so it is recorded as a standing risk rather than added to scope.
 
 ### Q9 — Test harness: **two tiers, and the first tier carries the weight**
 
@@ -668,25 +999,70 @@ covering only what genuinely needs a tree.
 
 ---
 
+### Q10 — Which locked requirements cannot be met by this design
+
+**None.** All seven FRs, four NFRs and six ACs are met. Three are met with a
+qualification, stated here rather than buried in the section that decides them.
+
+**FR-03 / AC-02 — `DeviceVerification` is reachable everywhere and functional
+only where the service implements it.** The screen is a route in the auth stack
+and a row in Settings, so it is navigable in all three apps. Its confirm action
+succeeds against `InMemoryAuthService` (`packages/auth/src/services/InMemoryAuthService.ts:116-119`) — so it is functional
+end-to-end in every preview composition, which is what AC-02's "in at least one
+app" asks — and throws `DEVICE_VERIFICATION_UNAVAILABLE` against
+`FirebaseAuthService` (`packages/firebase/src/services/FirebaseAuthService.ts:132-134`).
+That is not a gap this design leaves: it is the interface's own documented
+fail-closed contract (`packages/auth/src/types/auth.ts:28-33` — an implementation
+without a trusted server *must* fail closed), and issuing the code needs a
+trusted server, which CLAUDE.md rule 21 rules out while Spark is the target.
+**Making it functional under Firebase is out of reach of any shell design.**
+
+**NFR-01 / AC-01 — met at 21 lines, but only because two things moved.** The cap
+is met with margin, and the margin is manufactured: `readEnvironment`, the
+backend selection and the transport construction move out of Net Worth's entry
+file into its composition module (§Q3). Nothing is deleted and nothing moves into
+a package, but the count depends on that move, and a future entry-point
+responsibility eats the margin. Recorded so a later gate does not read 21 as
+comfortable.
+
+**AC-06 — met for the shell, not retroactively for the platform.** "Components
+render under test; the shell is not untested" is satisfied: the tier-2 harness
+(§Q9) mounts `AppCore`, the gates and the navigator. It does not make the seven
+platform screens component-tested; they become *reachable*, and the harness
+asserts the routes exist and mount, not that each screen behaves. Extending
+coverage to them is a natural follow-on and is not claimed here.
+
+**Two locked items are met by explicitly doing nothing**, which is worth stating
+so it is not mistaken for an oversight. The non-goals retire two of the first
+pass's open questions: "any app's own feature screens" is why v1 carries no route
+params (§Q3) — no platform screen takes an id, so the param machinery has no
+caller — and "deep linking" is why there is no `linking` config and no
+`expo-linking` dependency. `NavigationContainer` still resolves an initial URL if
+the platform hands it one, which §Q4 notes as a consequence of gate placement;
+that is a property falling out of the design, not a feature being built.
+
 ## Package impact
 
 | Package | Change | Breaking |
 | --- | --- | --- |
-| `packages/core` | 5 new modules under `src/shell/`; `AppCore` gains an optional prop and a changed memo dependency; 5 new peer dependencies | No |
+| `packages/core` | 7 new modules under `src/shell/` (adds `AuthStack.tsx` and `createApp.tsx`); `AppCore` gains an optional prop and a changed memo dependency; 5 new peer dependencies | No |
 | `packages/auth` | `AuthProvider` cold-start fix (F-07) | No |
 | `packages/account` | None — `SettingsScreen`, `ProfileScreen`, `DeleteAccount` are consumed as they are | No |
-| `packages/backup` | None — `BackupControls` is consumed; `BackupScreen` stays superseded (`BackupControls.tsx:19`) | No |
-| `packages/security` | None | No |
-| `apps/*` (all three) | 5 new dependencies at Expo-pinned versions; the three per-render constructions hoisted to module scope; `clearDataKeyFor` wired | No |
-| `apps/networth` | `tests/backupWiring.test.ts` re-pointed | Test only |
-| `scripts/check-architecture.mjs` | 3 guards added | No |
+| `packages/backup` | None — but `BackupScreen` stops being dead code and becomes the `settings/backup` route; `BackupControls.tsx:19-21`'s comment needs rewording in 9D, not the component | No |
+| `packages/security` | None. **NFR-02 restated:** `security` may import only `utils`, so no navigation dependency can reach it; and the portable-path guard walks *out from* `PortableCryptoService` and `recoveryCodes`, so adding to `core` cannot enter its transitive set | No |
+| `apps/*` (all three) | 5 new dependencies at Expo-pinned versions; a new entry file under 25 lines; `App.tsx` and its three per-render constructions absorbed by `createApp`; a new `src/routes.ts` | No |
+| `apps/networth` | `readEnvironment`, backend selection and transport construction move into `src/composition/services.ts`; `tests/backupWiring.test.ts` re-pointed. `src/data/`, document shapes and `firestore.rules` untouched (NFR-04) | Test only |
+| `scripts/check-architecture.mjs` | 4 guards added (the three of §Q9 tier 3, plus "no `packages/` file imports an Expo module") | No |
 
 ---
 
 ## Rules this design lives inside
 
 Checked deliberately, because the brief asks for BLOCKED if one must change.
-**None must change.**
+**None must change**, including under the supplied lock — the two clauses most
+likely to force one, NFR-01's line cap and FR-03's seventh screen, are met by
+injecting platform modules (§Q3) and by accepting the interface's own
+fail-closed contract (§Q10) rather than by relaxing anything.
 
 | Rule | Bearing | Status |
 | --- | --- | --- |
@@ -697,6 +1073,8 @@ Checked deliberately, because the brief asks for BLOCKED if one must change.
 | `BANNED_DEPS` (`check-architecture.mjs:34`) | Q5 | Satisfied: no redux/mobx |
 | ARCHITECTURE.md:19 — build app-specific first | Q7 | Addressed, with the reason it does not apply |
 | ARCHITECTURE.md:465 — custody is deliberately narrow | Q6 F-05 | Satisfied: no widening of `DataKeyLifecycle` |
+| CLAUDE.md 21 — no backend beyond Spark; document the limitation instead | Q10, FR-03 | Satisfied: `DeviceVerification` is reachable, and the reason it cannot succeed under Firebase is documented rather than worked around |
+| "shared packages never reach for a platform module" (`apps/expense/index.tsx:31-32`) | Q3 `createApp` | Satisfied: `AppPlatform` is a parameter; a guard is added so it stays one |
 
 ---
 
@@ -708,8 +1086,16 @@ To be made by the documentation gate (9D), not now:
   stack is insufficient" note; the shell in the Layout description of `core`.
 - `docs/ARCHITECTURE.md` — gate placement as a stated invariant (gates wrap the
   navigator; it is not a routing guard) and the reason.
-- `packages/core/README.md` — the shell, the route contract, the settings tab
-  ownership, and F-09's status change from "latent" to "latent, guarded".
+- `packages/core/README.md` — the shell, the route contract, `createApp`, the
+  settings tab ownership, and F-09's status change from "latent" to "latent,
+  guarded".
+- `packages/backup/README.md` and `BackupControls.tsx:19-21` — the comment says
+  `BackupScreen` is not used because it "belongs to an application with
+  navigation to route to it". That condition is now met, so the comment must be
+  reworded to describe the two hosts rather than an absence.
+- `packages/auth/README.md` — that `SignupScreen`, `PasswordResetScreen` and
+  `DeviceVerification` are reachable, and that the last one cannot succeed
+  against `FirebaseAuthService` by design.
 - `packages/security/README.md` — F-05's status once the clear ships.
 - `packages/auth/README.md` — F-07's status once the cold-start fix ships.
 - `docs/adr/` — the navigator choice. **Note:** `docs/adr/` does not exist in
@@ -719,39 +1105,56 @@ To be made by the documentation gate (9D), not now:
 
 ## Open questions
 
-1. **The requirement lock.** The blocker. FR-* and AC-* text.
-2. **Route params.** v1 has none (§Q3). Adding them later is a breaking change to
-   `AppDestination`. The lock should decide whether a detail screen needs an id
-   in the first release.
-3. **Route restoration across a lock.** Wrapping means a passphrase-protected
-   user returns to the first tab, not their route (§Q4). Restoring it means
-   persisting a route name across a locked key — cheap, and not obviously
-   something to do without deciding whether a route name is sensitive.
-4. **`docs/adr/`** does not exist here; the release flow that names it belongs to
-   a different repository.
-5. **Concurrent rendering** and the latest-ref pattern (§Q5).
-6. **Sign-out and F-06.** `deleteAccountFlow` has no caller
-   (`packages/account/README.md:57-63`); the Settings tab is where its button
-   would go. Out of scope here, but this gate creates the place for it.
+Resolved by the lock, and struck: *the requirement lock* (supplied), *route
+params* (the non-goal "any app's own feature screens" settles it — v1 carries
+none), and *deep linking* (a non-goal). What remains:
+
+1. **Route restoration across a lock.** FR-05's wrapping means a
+   passphrase-protected user returning from the background lands on `home`, not
+   their route (§Q4). FR-05 does not require restoring it, and AC-03 concerns
+   hardware back rather than resumption, so this is genuinely open rather than
+   deferred. Restoring it means persisting a route name across a locked key —
+   cheap, and not obviously right without deciding whether a route name is
+   sensitive.
+2. **`docs/adr/` does not exist in this repository.** The release flow naming it
+   belongs to a different repo, so the navigator ADR needs a home before 9D can
+   write it.
+3. **Concurrent rendering** and the latest-ref pattern (§Q5). Safe in this tree
+   today; revisit if a concurrent feature is ever enabled.
+4. **F-06 and account deletion.** `deleteAccountFlow` still has no caller
+   (`packages/account/README.md:57-63`). FR-03 makes `DeleteAccount` *reachable*,
+   which is what the lock asks; wiring `onDelete` to the flow is not required by
+   any clause and is not in scope. **This gate creates the place where the gap
+   becomes visible**, and it should be closed deliberately rather than by
+   whoever notices the button does nothing.
+5. **AC-05's cold start, in test.** The criterion says "verified after a cold
+   start". §Q9 satisfies it at the custody level — clear, construct a fresh
+   `KeyCustody` over the same storage, assert `absent` — which is a new process's
+   view of the store without being a new process. Whether that reading is
+   accepted, or whether the Hermes job should carry a device-level check, is for
+   the implementation gate to confirm.
 
 ---
 
 ## Implementation gate sequence
 
 Described, not implemented. **T** marks a gate whose tests precede its
-implementation.
+implementation. The lock added two gates: **9C-4** (the auth stack, for FR-03)
+and **9C-5** (`createApp`, for FR-07/NFR-01).
 
-| Gate | Scope | Tests first? |
-| --- | --- | --- |
-| **9C-0** | F-07: `AuthProvider` cold start. `packages/auth` only, no shell code. | **T** — a failing test reproducing the `null` overwrite, before the fix. |
-| **9C-1** | Pure core: `routes.ts`, `signOutPlan.ts`. No JSX, no dependency. | **T** — the full tier-1 suite, red, before either module exists. |
-| **9C-2** | Dependencies: 5 packages into `packages/core` (peer) and all three apps (real). Nothing rendered yet. | No — verified by `pnpm turbo build test lint` staying green and the lockfile diff. |
-| **9C-3** | `AppShell.tsx`, `SettingsRoute.tsx`, `useSignOut.ts`; `AppCore` gains `clearDataKeyFor` and the fixed memo; the three architecture guards. | **T** — guards added and shown failing against the current tree before the memo is changed. |
-| **9C-4** | The tier-2 mount harness and its three assertions. | **T** — by definition. |
-| **9C-5** | Expense migration; the three per-render constructions hoisted. | Existing suites must stay green. |
-| **9C-6** | Investment migration. | As above. |
-| **9C-7** | Net Worth migration; `backupWiring.test.ts` re-pointed. | **T** — the re-pointed assertion written before the move. |
-| **9D** | Documentation reconciliation across the four layers. | n/a |
+| Gate | Scope | Requirements | Tests first? |
+| --- | --- | --- | --- |
+| **9C-0** | F-07: `AuthProvider` cold start. `packages/auth` only, no shell code. | — | **T** — a failing test reproducing the `null` overwrite, before the fix. |
+| **9C-1** | Pure core: `routes.ts`, `signOutPlan.ts`. No JSX, no dependency. | FR-01, FR-02 | **T** — the full tier-1 suite, red, before either module exists. |
+| **9C-2** | Dependencies: 5 packages into `packages/core` (peer) and all three apps (real). Nothing rendered yet. | NFR-02 | No — verified by `pnpm turbo build test lint` staying green and the lockfile diff. |
+| **9C-3** | `AppShell.tsx`, `SettingsRoute.tsx`, `useSignOut.ts`; `AppCore` gains `clearDataKeyFor` and the fixed memo; the three architecture guards. | FR-04, FR-05, FR-06, NFR-03 | **T** — guards added and shown failing against the current tree before the memo is changed. |
+| **9C-4** | The auth stack: `LoginScreen` → `signup` / `reset` / `verify-device`, replacing the bare `signedOut` element. | FR-03 | **T** — the route table assertions extended before the stack exists. |
+| **9C-5** | `createApp`, with `AppPlatform` injected. No app migrated yet. | FR-07, NFR-01 | **T** — a bootstrap test asserting fail-closed on both `BootstrapFailure` values. |
+| **9C-6** | The tier-2 mount harness and its assertions. | AC-06, AC-03, AC-04 | **T** — by definition. |
+| **9C-7** | Expense migration: new entry file, three per-render constructions removed. | AC-01 | Existing suites must stay green. |
+| **9C-8** | Investment migration. | AC-01 | As above. |
+| **9C-9** | Net Worth migration; `readEnvironment`/backend selection/transport moved behind `resolveServices`; `backupWiring.test.ts` re-pointed. | AC-01, NFR-04 | **T** — the re-pointed assertion written before the move. |
+| **9D** | Documentation reconciliation across the four layers. | — | n/a |
 
 ### Acceptance criteria
 
@@ -759,56 +1162,90 @@ implementation.
 can overwrite a user delivered by `onAuthStateChanged`; it passes after; no other
 `packages/auth` test changes.
 
-**9C-1** — `resolveRouteTable` appends `Settings` in every case; rejects an app
-declaring `Settings`, a duplicate name, an empty tab list and a dangling
-`within`; omits `backup`, `pair-device` and `sign-out` when the capability is
-absent. `signOutPlan` orders the clear strictly before the sign-out and refuses
-an empty identity. Zero new dependencies in this gate.
+**9C-1** *(FR-01, FR-02)* — `resolveRouteTable` appends `Settings` in every case;
+rejects an app declaring `Settings`, a duplicate name, an empty tab list, a
+dangling `within` and a `home` naming no tab; defaults `home` to the first tab;
+omits `backup`, `pair-device` and `sign-out` when the capability is absent.
+`signOutPlan` orders the clear strictly before the sign-out and refuses an empty
+identity. Zero new dependencies in this gate.
 
-**9C-2** — `pnpm turbo build test lint` green; `pnpm-lock.yaml` shows the five
-packages at the Expo-pinned versions (`react-native-screens ~4.4.0`,
-`react-native-safe-area-context 4.12.0`); no app renders a navigator yet.
+**9C-2** *(NFR-02)* — `pnpm turbo build test lint` green, which includes the
+portable-path guard; `pnpm-lock.yaml` shows the five packages at the Expo-pinned
+versions (`react-native-screens ~4.4.0`, `react-native-safe-area-context
+4.12.0`); no `@react-navigation/*` or `react-native-screens` entry appears in
+`packages/security/package.json`; no app renders a navigator yet.
 
-**9C-3** — The memo guard fails against the unmodified `AuthGate` and passes
-after. `AppShell` is rendered only inside `EncryptedRepositoryProvider`. No
-`apps/*/src/screens/**` file imports `@react-navigation/*`. `AppCore` with no
-`clearDataKeyFor` yields `signOutAvailable: false`.
+**9C-3** *(FR-05, FR-06, NFR-03)* — The memo guard fails against the unmodified
+`AuthGate` and passes after. `AppShell` is rendered only inside
+`EncryptedRepositoryProvider`. No `apps/*/src/screens/**` file imports
+`@react-navigation/*`. `AppCore` with no `clearDataKeyFor` yields
+`signOutAvailable: false`, and the Settings tab then has no sign-out row.
 
-**9C-4** — With a lifecycle reporting `locked`, no route component is in the
-rendered tree. The gate order is asserted structurally. Sign-out calls
-`clearDataKeyFor` before `signOut`, proven by call order, and the address
-cleared equals `custodyAddressFor(userId)`.
+**9C-4** *(FR-03)* — `signup`, `reset` and `verify-device` are routes in the
+signed-out stack; `LoginScreen`'s `onCreateAccount` and `onForgotPassword` are
+wired to pushes rather than `() => undefined`; the signed-out subtree renders no
+`EncryptedRepositoryProvider`, asserted structurally.
 
-**9C-5/6/7** — Each app builds, its existing tests pass unchanged (except Net
-Worth's `backupWiring.test.ts`, re-pointed in 9C-7), Settings is reachable, and
-sign-out leaves no custody record at the derived address. The Hermes job passes
-at both API levels.
+**9C-5** *(FR-07, NFR-01)* — `createApp` fails closed on a rejected `services`
+resolver and on a failed secure-storage bootstrap, rendering the unavailable copy
+and nothing else in both cases; no file under `packages/` imports an Expo module
+(the existing zero-match property, asserted in `check-architecture.mjs` so it
+cannot regress).
+
+**9C-6** *(AC-03, AC-04, AC-06)* — With a lifecycle reporting `locked`, no route
+component is in the rendered tree (FR-05). The gate order is asserted
+structurally. Hardware back from a nested route pops to its parent and does not
+exit. A state change above `AppCore` does not construct a second
+`DataKeyLifecycle` — the memo identity is stable across the re-render. Sign-out
+calls `clearDataKeyFor` before `signOut`, proven by call order.
+
+**9C-7/8/9** *(AC-01, AC-02, AC-05, NFR-04)* — Each app builds; each entry file
+is **under 25 lines**, asserted mechanically rather than by eye; existing suites
+pass unchanged (except Net Worth's `backupWiring.test.ts`, re-pointed in 9C-9);
+every one of the seven platform screens is reachable by navigation in at least
+one app (AC-02). **AC-05:** after sign-out, a freshly constructed `KeyCustody`
+over the same storage reports `absent` for that identity, and the address it
+looks at equals `custodyAddressFor(userId)` — the derived address, never a list
+of what this process wrote (F-08). **NFR-04:** `apps/networth/src/data/`,
+the Firestore document shapes and `firestore.rules` are unchanged in the diff.
+The Hermes job passes at both API levels.
 
 ---
 
 ## Scope exclusions
 
-Named so a later gate does not read them as omissions:
+Named so a later gate does not read them as omissions. **Two exclusions from the
+first pass are struck**, because the lock puts them in scope.
 
-1. **Route params** (§Q3) — no destination takes an id in v1.
-2. **Deep-link URL scheme.** `NavigationContainer` handles a link if one arrives;
-   no `linking` config, no `expo-linking`, no registered scheme.
-3. **Web.** Fact 2. `react-native-web` appears only in the tier-2 test harness,
-   never as a shipping target.
-4. **Route restoration across a lock** (open question 3).
-5. **F-06 / account deletion.** The Settings tab creates the place for the
-   button; wiring `deleteAccountFlow` is not this gate.
+1. **Route params** (§Q3) — no destination takes an id in v1. Now positively
+   justified by the non-goal "any app's own feature screens", rather than
+   deferred.
+2. **Deep-link URL scheme.** A non-goal. No `linking` config, no `expo-linking`,
+   no registered scheme; `NavigationContainer` still resolves an initial URL if
+   the platform hands it one, which is a consequence of §Q4 rather than a feature.
+3. **Web.** A non-goal, and fact 2. `react-native-web` appears only in the tier-2
+   test harness, never as a shipping target.
+4. **Route restoration across a lock** (open question 1).
+5. **Wiring `deleteAccountFlow`.** `DeleteAccount` becomes *reachable*, which is
+   what FR-03 requires; connecting `onDelete` to the flow is required by no
+   clause (open question 4).
 6. **F-09's fix.** Deferred with a guard (§Q6).
-7. **`SignupScreen`, `PasswordResetScreen`, `DeviceVerification`.** The shell
-   makes Settings reachable, which unblocks `ProfileScreen`, `SettingsScreen`,
-   `DeleteAccount` and backup. The three auth screens hang off `LoginScreen`'s
-   stubbed `onCreateAccount`/`onForgotPassword` (9A Q3) — a signed-out flow,
-   below the auth gate, and a separate piece of work.
+7. ~~**`SignupScreen`, `PasswordResetScreen`, `DeviceVerification`.**~~ **Struck.**
+   FR-03 and AC-02 put all seven screens in scope; they become the auth stack
+   (§Q2, gate 9C-4).
 8. **A drawer, a header search, or any second navigator shape.** The trigger for
    a `@platform/shell` package (§Q7), not a target now.
-9. **`BackupScreen`.** Stays superseded by `BackupControls`
-   (`BackupControls.tsx:19`); the Settings tab mounts the control, not the screen.
+9. ~~**`BackupScreen`.**~~ **Struck.** FR-03 requires it reachable, and
+   `BackupControls.tsx:19-21`'s own stated condition — an application with
+   navigation to route to it — is now met. It becomes the `settings/backup`
+   route; `BackupControls` stays exported for a host without navigation.
+10. **Push notifications, per-app theming, and the platform message-map gap**
+    (9A Q6's 45 uncovered codes). All three are non-goals in the lock, and the
+    message-map gap in particular stays open and stays recorded.
+11. **Component tests for the seven platform screens themselves.** AC-06 covers
+    the shell; the harness asserts the routes mount, not that each screen behaves
+    (§Q10).
 
 ---
 
-GATE 9B RESULT: BLOCKED
+GATE 9B RESULT: READY FOR IMPLEMENTATION
